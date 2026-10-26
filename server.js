@@ -130,16 +130,21 @@ const csv = rows => {
 async function admin(req, res, url) {
   if (!authed(req)) return send(res, 401, "Sign in required", "text/plain", { "WWW-Authenticate": 'Basic realm="Sale Now On admin"' });
   if (!db) return send(res, 503, "No database", "text/plain");
+  if (req.method === "POST" && url.pathname === "/admin/delete") {
+    const t = url.searchParams.get("t") === "alerts" ? "alert_signups" : "early_access", id = +url.searchParams.get("id");
+    if (id) await db.query(`delete from ${t} where id = $1`, [id]);
+    res.writeHead(303, { Location: "/admin" }); return res.end();
+  }
   const a = (await db.query("select id,email,categories,created_at,unsubscribed_at from alert_signups order by created_at desc")).rows;
   const e = (await db.query("select id,business,site,kind,categories,other,name,email,created_at from early_access order by created_at desc")).rows;
   if (url.pathname === "/admin/alerts.csv") return send(res, 200, csv(a), "text/csv", { "Content-Disposition": "attachment; filename=sales-alerts.csv" });
   if (url.pathname === "/admin/early-access.csv") return send(res, 200, csv(e), "text/csv", { "Content-Disposition": "attachment; filename=early-access.csv" });
-  const table = (rows, cols) => `<table><tr>${cols.map(c => `<th>${c}</th>`).join("")}</tr>${rows.map(r => `<tr>${cols.map(c => `<td>${esc(Array.isArray(r[c]) ? r[c].join(", ") : r[c] instanceof Date ? r[c].toISOString().slice(0, 16).replace("T", " ") : r[c])}</td>`).join("")}</tr>`).join("")}</table>`;
+  const table = (rows, cols, t) => `<table><tr>${cols.map(c => `<th>${c}</th>`).join("")}<th></th></tr>${rows.map(r => `<tr>${cols.map(c => `<td>${esc(Array.isArray(r[c]) ? r[c].join(", ") : r[c] instanceof Date ? r[c].toISOString().slice(0, 16).replace("T", " ") : r[c])}</td>`).join("")}<td><form method="post" action="/admin/delete?t=${t}&id=${r.id}" onsubmit="return confirm('Delete this entry for good?')"><button style="border:0;background:none;color:#a31c22;cursor:pointer;font:inherit">Delete</button></form></td></tr>`).join("")}</table>`;
   send(res, 200, `<!doctype html><meta name=viewport content="width=device-width,initial-scale=1"><title>SNO admin</title>
 <link rel="stylesheet" href="/style.css"><style>table{border-collapse:collapse;width:100%;font-size:14px;margin:10px 0 30px}th,td{border-bottom:1px solid #e2e2e2;padding:7px;text-align:left;vertical-align:top}th{color:#6b6b6b}</style>
 <main class="wrap" style="padding-top:24px"><a class="logo" href="/">SALE NOW ON</a> <span class="pill">Admin</span>
-<h2 style="margin-top:24px">SALES ALERTS · ${a.length} <a style="font-size:14px" href="/admin/alerts.csv">Download CSV</a></h2>${table(a, ["email", "categories", "created_at", "unsubscribed_at"])}
-<h2>Early access · ${e.length} <a style="font-size:14px" href="/admin/early-access.csv">Download CSV</a></h2>${table(e, ["business", "site", "kind", "categories", "other", "name", "email", "created_at"])}</main>`, "text/html; charset=utf-8", { "Cache-Control": "no-store" });
+<h2 style="margin-top:24px">SALES ALERTS · ${a.length} <a style="font-size:14px" href="/admin/alerts.csv">Download CSV</a></h2>${table(a, ["email", "categories", "created_at", "unsubscribed_at"], "alerts")}
+<h2>Early access · ${e.length} <a style="font-size:14px" href="/admin/early-access.csv">Download CSV</a></h2>${table(e, ["business", "site", "kind", "categories", "other", "name", "email", "created_at"], "early")}</main>`, "text/html; charset=utf-8", { "Cache-Control": "no-store" });
 }
 
 http.createServer(async (req, res) => {

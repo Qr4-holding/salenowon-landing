@@ -91,10 +91,10 @@ input:focus{outline:none;border-color:var(--red);box-shadow:0 0 0 3px #f8d4d6}
 .doc h2{font-size:20px;margin:28px 0 8px}
 
 @media (min-width:900px){
-  .hero{grid-template-columns:1fr 1.15fr;gap:48px;align-items:start;padding-top:28px}
+  .hero{grid-template-columns:1fr 1.15fr;gap:48px;align-items:center;padding-top:40px;padding-bottom:80px}
   .v-wide{display:block!important}
   .v-tall{display:none!important}
-  .hero-video{margin-top:56px}
+  .hero-video{margin-top:20px}
   .features{grid-template-columns:repeat(3,1fr)}
   .sellers{grid-template-columns:1fr 1fr;gap:48px;align-items:start}
 }

@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sale Now On · Every sale. Every brand. One place.</title>
+<meta name="description" content="Sale Now On is coming soon. Tell us what you love, and the best weekend deals come straight to you. Get free weekly SALES ALERTS.">
+<meta property="og:title" content="SALE NOW ON · Coming soon">
+<meta property="og:description" content="Every sale. Every brand. One place. Get free weekly SALES ALERTS.">
+<meta property="og:image" content="https://salenowon.co.uk/media/og.jpg">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#d7262d">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="top wrap">
+  <a class="logo" href="/" aria-label="Sale Now On home">SALE NOW ON</a>
+  <span class="pill">Coming soon</span>
+</header>
+
+<main>
+<section class="hero wrap">
+  <div class="hero-copy">
+    <span class="new">NEW</span>
+    <h1>Every sale.<br>Every brand.<br><span class="red">One place.</span></h1>
+    <p class="lead">Tell us what you love, and the best weekend deals come straight to you.</p>
+
+    <form class="card alerts" id="alerts-form" novalidate>
+      <h2>Get SALES ALERTS</h2>
+      <p class="muted">One email a week with the sales picked for you. Free.</p>
+      <fieldset class="chips" aria-label="What do you shop for? (optional)">
+        <legend>What do you shop for? <span class="opt">Optional</span></legend>
+        <label><input type="checkbox" name="cats" value="Fashion"><span>Fashion</span></label>
+        <label><input type="checkbox" name="cats" value="Home"><span>Home</span></label>
+        <label><input type="checkbox" name="cats" value="Beauty"><span>Beauty</span></label>
+        <label><input type="checkbox" name="cats" value="Tech"><span>Tech</span></label>
+        <label><input type="checkbox" name="cats" value="Garden"><span>Garden</span></label>
+        <label><input type="checkbox" name="cats" value="Kids"><span>Kids</span></label>
+      </fieldset>
+      <label class="lbl" for="al-email">Email</label>
+      <div class="row">
+        <input id="al-email" name="email" type="email" autocomplete="email" placeholder="you@example.com" required>
+        <button type="submit" class="btn">Send me alerts</button>
+      </div>
+      <input class="hp" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
+      <p class="small">By signing up you agree to a weekly sales email from Sale Now On. Unsubscribe any time. <a href="/privacy">Privacy notice</a>.</p>
+      <p class="msg" role="status" aria-live="polite"></p>
+    </form>
+  </div>
+
+  <div class="hero-video">
+    <video class="v-wide" controls playsinline preload="none" poster="/media/poster-16x9.jpg">
+      <source src="/media/promo-16x9.mp4" type="video/mp4">
+    </video>
+    <video class="v-tall" controls playsinline preload="none" poster="/media/poster-9x16.jpg">
+      <source src="/media/promo-9x16.mp4" type="video/mp4">
+    </video>
+  </div>
+</section>
+
+<section class="features wrap" aria-label="What you get">
+  <div class="feat"><b>Picked for you</b><span>Alerts by category and budget, not a flood of offers.</span></div>
+  <div class="feat"><b>The weekend show</b><span>Every Friday, the weekend's best sales in one short video.</span></div>
+  <div class="feat"><b>Scan and go</b><span>Every offer in the show has a code that takes you straight to it.</span></div>
+</section>
+
+<section class="sellers wrap" id="sellers">
+  <div class="sellers-copy">
+    <span class="eyebrow">RETAILERS · BRANDS · AGENCIES</span>
+    <h2>Your sale, made into video ads in minutes.</h2>
+    <p class="lead">Upload a product or just type your offer. Sale Now On writes it, voices it and makes it in every social size, then puts it in front of shoppers who asked for it.</p>
+    <ul class="ticks">
+      <li>Video and image ads in 9:16, 1:1 and 16:9</li>
+      <li>Shown on Sale Now On and your own socials</li>
+      <li>Founding sellers get early access and launch pricing</li>
+    </ul>
+  </div>
+
+  <form class="card early" id="early-form" novalidate>
+    <h3>Request early access</h3>
+    <label class="lbl" for="ea-business">Business name</label>
+    <input id="ea-business" name="business" autocomplete="organization" required>
+    <label class="lbl" for="ea-site">Website</label>
+    <input id="ea-site" name="site" placeholder="yourshop.co.uk" autocomplete="url">
+    <fieldset class="seg" aria-label="You are a">
+      <legend>You are a</legend>
+      <label><input type="radio" name="kind" value="Retailer" checked><span>Retailer</span></label>
+      <label><input type="radio" name="kind" value="Brand"><span>Brand</span></label>
+      <label><input type="radio" name="kind" value="Agency"><span>Agency</span></label>
+      <label><input type="radio" name="kind" value="Seller"><span>Seller</span></label>
+    </fieldset>
+    <fieldset class="chips" aria-label="Product categories">
+      <legend>Product categories</legend>
+      <label><input type="checkbox" name="cats" value="Fashion"><span>Fashion</span></label>
+      <label><input type="checkbox" name="cats" value="Footwear"><span>Footwear</span></label>
+      <label><input type="checkbox" name="cats" value="Beauty"><span>Beauty</span></label>
+      <label><input type="checkbox" name="cats" value="Home"><span>Home</span></label>
+      <label><input type="checkbox" name="cats" value="Electronics"><span>Electronics</span></label>
+      <label><input type="checkbox" name="cats" value="Garden"><span>Garden</span></label>
+      <label><input type="checkbox" name="cats" value="Kids"><span>Kids</span></label>
+      <label><input type="checkbox" name="cats" value="Sports"><span>Sports</span></label>
+      <label><input type="checkbox" name="cats" value="Food & drink"><span>Food &amp; drink</span></label>
+      <label><input type="checkbox" name="cats" value="Gifts"><span>Gifts</span></label>
+    </fieldset>
+    <label class="lbl" for="ea-other">Anything else you sell? <span class="opt">Optional</span></label>
+    <input id="ea-other" name="other" maxlength="200">
+    <label class="lbl" for="ea-name">Your name</label>
+    <input id="ea-name" name="name" autocomplete="name" required>
+    <label class="lbl" for="ea-email">Work email</label>
+    <input id="ea-email" name="email" type="email" autocomplete="email" required>
+    <input class="hp" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
+    <button type="submit" class="btn wide">Request early access</button>
+    <p class="small">We'll only use this to contact you about Sale Now On for business. <a href="/privacy">Privacy notice</a>.</p>
+    <p class="msg" role="status" aria-live="polite"></p>
+  </form>
+</section>
+
+<section class="index wrap" aria-label="The Sale Index">
+  <div><b>The Sale Index</b> launches with the app: how deep UK sales are running, every week.</div>
+  <div class="index-num">—%</div>
+</section>
+</main>
+
+<footer class="foot wrap">
+  <a class="logo small-logo" href="/">SALE NOW ON</a>
+  <nav><a href="/">Home</a><a href="#sellers">For sellers</a><a href="/privacy">Privacy</a></nav>
+  <p>© <span id="yr">2026</span> Sale Now On</p>
+</footer>
+<script src="/app.js" defer></script>
+</body>
+</html>

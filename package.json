@@ -1,0 +1,10 @@
+{
+  "name": "salenowon-landing",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sale Now On coming-soon landing page with SALES ALERTS and early-access sign-ups",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=20" },
+  "dependencies": { "pg": "^8.13.1" }
+}

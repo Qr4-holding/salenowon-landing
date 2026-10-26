@@ -1,0 +1,54 @@
+# Sale Now On coming-soon page + its own PostgreSQL, as deployed on the Hostinger VPS (Docker manager project "salenowon").
+# Project environment (set on the server only, never in this repo):
+#   DB_PASSWORD, ADMIN_PASSWORD, SITE_HOSTS (domains Caddy serves), CONTACT_EMAIL, CONTROLLER
+# Updating: push to main, then restart the project (the web container clones main on start).
+services:
+  web:
+    image: node:22-alpine
+    command: ["sh", "-c", "apk add --no-cache git >/dev/null && rm -rf /app && git clone --depth 1 https://github.com/Qr4-holding/salenowon-landing.git /app && cd /app && npm install --omit=dev --no-audit --no-fund && exec node server.js"]
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgres://sno:${DB_PASSWORD}@db:5432/sno
+      - ADMIN_USER=admin
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - CONTACT_EMAIL=${CONTACT_EMAIL:-}
+      - CONTROLLER=${CONTROLLER:-}
+    labels:
+      caddy: ${SITE_HOSTS}
+      caddy.reverse_proxy: "{{upstreams 3000}}"
+    networks:
+      - web
+      - internal
+    depends_on:
+      - db
+    restart: unless-stopped
+  backup:
+    image: postgres:17-alpine
+    environment:
+      - PGPASSWORD=${DB_PASSWORD}
+    command: ["sh", "-c", "sleep 30; while true; do pg_dump -h db -U sno sno | gzip > /backups/sno-$$(date +%Y-%m-%d).sql.gz && find /backups -name 'sno-*.sql.gz' -mtime +14 -delete; sleep 86400; done"]
+    volumes:
+      - backups:/backups
+    networks:
+      - internal
+    depends_on:
+      - db
+    restart: unless-stopped
+  db:
+    image: postgres:17-alpine
+    environment:
+      - POSTGRES_USER=sno
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=sno
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - internal
+    restart: unless-stopped
+networks:
+  web:
+    external: true
+  internal: {}
+volumes:
+  pgdata: {}
+  backups: {}

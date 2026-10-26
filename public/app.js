@@ -1,6 +1,13 @@
 (function () {
   document.getElementById("yr").textContent = new Date().getFullYear();
 
+  // big red play button; native controls appear once playing
+  var box = document.querySelector(".hero-video"), btn = box && box.querySelector(".play");
+  if (btn) btn.addEventListener("click", function () {
+    var v = Array.prototype.find.call(box.querySelectorAll("video"), function (x) { return x.offsetParent !== null; });
+    if (!v) return;
+    v.controls = true; box.classList.add("playing"); v.play();
+  });
   // only one video plays at a time
   var vids = document.querySelectorAll("video");
   vids.forEach(function (v) {

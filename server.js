@@ -124,7 +124,16 @@ async function api(req, res, route) {
   } catch (e) { console.error(e); send(res, 500, { error: "Something went wrong. Please try again." }); }
 }
 
+// One-click sign-in from the Chrome extension: the extension's key buys a 2-minute, single-use link; the link sets a 30-day cookie.
+const signKey = () => crypto.createHash("sha256").update("sno-admin-session|" + (process.env.ADMIN_PASSWORD || "") + "|" + (process.env.INTAKE_KEY || "")).digest();
+const sign = (kind, exp) => crypto.createHmac("sha256", signKey()).update(kind + "." + exp).digest("hex");
+const mint = (kind, seconds) => { const exp = Date.now() + seconds * 1000; return exp + "." + sign(kind, exp); };
+const valid = (kind, tok) => { const [exp, sig] = String(tok || "").split("."); if (!exp || !sig || +exp < Date.now()) return false;
+  const want = Buffer.from(sign(kind, exp)), got = Buffer.from(sig); return want.length === got.length && crypto.timingSafeEqual(want, got); };
+const usedLinks = new Set();
+const cookieOf = (req, name) => (String(req.headers.cookie || "").split(/;\s*/).find(c => c.startsWith(name + "=")) || "").slice(name.length + 1);
 function authed(req) {
+  if (process.env.ADMIN_PASSWORD && process.env.INTAKE_KEY && valid("session", cookieOf(req, "sno_admin"))) return true;
   const pw = process.env.ADMIN_PASSWORD; if (!pw) return false;
   const h = req.headers.authorization || ""; if (!h.startsWith("Basic ")) return false;
   const [u, p] = Buffer.from(h.slice(6), "base64").toString().split(":");
@@ -140,6 +149,18 @@ const csv = rows => {
 };
 
 async function admin(req, res, url) {
+  if (url.pathname === "/admin/login") {
+    const t = url.searchParams.get("t");
+    if (!process.env.ADMIN_PASSWORD || !process.env.INTAKE_KEY || !valid("link", t) || usedLinks.has(t))
+      return send(res, 403, "This sign-in link has expired or was already used. Click Open my dashboard in the Chrome extension again.", "text/plain; charset=utf-8");
+    usedLinks.add(t); if (usedLinks.size > 500) usedLinks.clear();
+    res.writeHead(303, { ...SEC, Location: "/admin/stats", "Cache-Control": "no-store",
+      "Set-Cookie": `sno_admin=${mint("session", 30 * 86400)}; Path=/admin; Max-Age=${30 * 86400}; HttpOnly; Secure; SameSite=Lax` });
+    return res.end();
+  }
+  if (url.pathname === "/admin/logout") {
+    res.writeHead(303, { ...SEC, Location: "/", "Set-Cookie": "sno_admin=; Path=/admin; Max-Age=0; HttpOnly; Secure; SameSite=Lax" }); return res.end();
+  }
   if (!authed(req)) return send(res, 401, "Sign in required", "text/plain", { "WWW-Authenticate": 'Basic realm="Sale Now On admin"' });
   if (!db) return send(res, 503, "No database", "text/plain");
   if (req.method === "POST" && url.pathname === "/admin/delete") {
@@ -185,7 +206,7 @@ async function admin(req, res, url) {
   const table = (rows, cols, t) => `<table><tr>${cols.map(c => `<th>${c}</th>`).join("")}<th></th></tr>${rows.map(r => `<tr>${cols.map(c => `<td>${cellOf(c, r[c])}</td>`).join("")}<td><form method="post" action="/admin/delete?t=${t}&id=${r.id}" onsubmit="return confirm('Delete this entry for good?')"><button style="border:0;background:none;color:#a31c22;cursor:pointer;font:inherit">Delete</button></form></td></tr>`).join("")}</table>`;
   send(res, 200, `<!doctype html><meta name=viewport content="width=device-width,initial-scale=1"><title>SNO admin</title>
 <link rel="stylesheet" href="/style.css"><style>table{border-collapse:collapse;width:100%;font-size:14px;margin:10px 0 30px}th,td{border-bottom:1px solid #e2e2e2;padding:7px;text-align:left;vertical-align:top}th{color:#6b6b6b}</style>
-<main class="wrap" style="padding-top:24px"><a class="logo" href="/">SALE NOW ON</a> <span class="pill">Admin</span> <a href="/admin/stats" style="margin-left:12px;font-weight:700">Analytics →</a>
+<main class="wrap" style="padding-top:24px"><a class="logo" href="/">SALE NOW ON</a> <span class="pill">Admin</span> <a href="/admin/stats" style="margin-left:12px;font-weight:700">Analytics →</a> <a href="/admin/logout" style="margin-left:12px;font-size:13px;color:#6b6b6b">Sign out</a>
 <h2 style="margin-top:24px">Pages sent from Chrome · ${(it = (await db.query("select id,campaign,host,count,created_at from intake order by id desc limit 50")).rows).length}</h2>${table(it, ["campaign", "host", "count", "created_at"], "intake")}
 <h2 style="margin-top:24px">QR short links · salenowon.co.uk/go/…</h2>${(lk = (await db.query("select code as id, code, target, fallback, starts_at, ends_at, scans, note from links order by updated_at desc")).rows, "")}${table(lk.map(l => ({ ...l, tools: l.code })), ["code", "target", "fallback", "starts_at", "ends_at", "scans", "note", "tools"], "links")}
 ${linkForm(lk.find(l => l.code === url.searchParams.get("edit")))}
@@ -352,6 +373,12 @@ http.createServer(async (req, res) => {
     const url = new URL(req.url, "http://x");
     if (url.pathname === "/api/intake") return await intake(req, res);
     if (url.pathname === "/api/links") return await linksApi(req, res);
+    if (url.pathname === "/api/admin-link") {
+      if (req.method === "OPTIONS") return send(res, 204, "", "text/plain", CORS);
+      const key = process.env.INTAKE_KEY;
+      if (req.method !== "POST" || !key || !process.env.ADMIN_PASSWORD || req.headers["x-sno-key"] !== key) return send(res, 401, { error: "Wrong or missing key" }, "application/json", CORS);
+      return send(res, 200, { url: "https://salenowon.co.uk/admin/login?t=" + mint("link", 120) }, "application/json", { ...CORS, "Cache-Control": "no-store" });
+    }
     const gm = /^\/go\/([^/]+)\/?$/.exec(url.pathname);
     if (gm) return await go(req, res, decodeURIComponent(gm[1]).toLowerCase());
     if (req.method === "POST" && url.pathname === "/api/alerts") return await api(req, res, "alerts");

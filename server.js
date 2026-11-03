@@ -160,6 +160,12 @@ async function intake(req, res) {
   if (req.method === "OPTIONS") return send(res, 204, "", "text/plain", CORS);
   if (!key || req.headers["x-sno-key"] !== key) return send(res, 401, { error: "Wrong or missing key. Check the extension's Settings." }, "application/json", CORS);
   if (!db) return send(res, 503, { error: "No database" }, "application/json", CORS);
+  if (req.method === "GET") { // read-only feed for the video builder: the public sale listings people sent
+    const id = +new URL(req.url, "http://x").searchParams.get("id");
+    const r = id ? await db.query("select * from intake where id=$1", [id])
+                 : await db.query("select id,campaign,host,page_url,count,created_at from intake order by id desc limit 50");
+    return send(res, 200, id ? (r.rows[0] || {}) : r.rows, "application/json", { "Cache-Control": "no-store" });
+  }
   let body = "";
   for await (const c of req) { body += c; if (body.length > 2_000_000) return send(res, 413, { error: "Too much data" }, "application/json", CORS); }
   let b; try { b = JSON.parse(body); } catch { return send(res, 400, { error: "Bad data" }, "application/json", CORS); }

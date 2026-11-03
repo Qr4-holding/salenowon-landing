@@ -27,7 +27,10 @@ async function migrate() {
           created_at timestamptz not null default now());
         create table if not exists intake (
           id serial primary key, campaign text not null, host text, page_url text, page_title text,
-          products jsonb not null, count int not null, created_at timestamptz not null default now());`);
+          products jsonb not null, count int not null, created_at timestamptz not null default now());
+        create table if not exists links (
+          code text primary key, target text not null, fallback text not null default '/', starts_at timestamptz, ends_at timestamptz,
+          note text, scans int not null default 0, created_at timestamptz not null default now(), updated_at timestamptz not null default now());`);
       return console.log("db ready");
     } catch (e) { console.log("waiting for db…", e.message); await new Promise(r => setTimeout(r, 3000)); }
   }
@@ -134,14 +137,21 @@ async function admin(req, res, url) {
   if (!authed(req)) return send(res, 401, "Sign in required", "text/plain", { "WWW-Authenticate": 'Basic realm="Sale Now On admin"' });
   if (!db) return send(res, 503, "No database", "text/plain");
   if (req.method === "POST" && url.pathname === "/admin/delete") {
-    const t = { alerts: "alert_signups", early: "early_access", intake: "intake" }[url.searchParams.get("t")] || "early_access", id = +url.searchParams.get("id");
-    if (id) await db.query(`delete from ${t} where id = $1`, [id]);
+    const t = { alerts: "alert_signups", early: "early_access", intake: "intake", links: "links" }[url.searchParams.get("t")] || "early_access", id = url.searchParams.get("id");
+    if (t === "links") await db.query("delete from links where code = $1", [id]);
+    else if (+id) await db.query(`delete from ${t} where id = $1`, [+id]);
+    res.writeHead(303, { Location: "/admin" }); return res.end();
+  }
+  if (req.method === "POST" && url.pathname === "/admin/links") {
+    let body = ""; for await (const c of req) { body += c; if (body.length > 20000) break; }
+    const err = await saveLink(Object.fromEntries(new URLSearchParams(body)));
+    if (err) return send(res, 400, err + ". Go back and try again.", "text/plain; charset=utf-8");
     res.writeHead(303, { Location: "/admin" }); return res.end();
   }
   const im = /^\/admin\/intake\/(\d+)\.json$/.exec(url.pathname);
   if (im) { const r = await db.query("select * from intake where id=$1", [+im[1]]); return send(res, r.rows.length ? 200 : 404, r.rows[0] || { error: "not found" }); }
   if (url.pathname === "/admin/intake.json") { const r = await db.query("select id,campaign,host,page_url,count,created_at from intake order by id desc limit 200"); return send(res, 200, r.rows); }
-  let it = [];
+  let it = [], lk = [];
   const a = (await db.query("select id,email,categories,created_at,unsubscribed_at from alert_signups order by created_at desc")).rows;
   const e = (await db.query("select id,business,site,kind,categories,other,name,email,created_at from early_access order by created_at desc")).rows;
   if (url.pathname === "/admin/alerts.csv") return send(res, 200, csv(a), "text/csv", { "Content-Disposition": "attachment; filename=sales-alerts.csv" });
@@ -151,8 +161,47 @@ async function admin(req, res, url) {
 <link rel="stylesheet" href="/style.css"><style>table{border-collapse:collapse;width:100%;font-size:14px;margin:10px 0 30px}th,td{border-bottom:1px solid #e2e2e2;padding:7px;text-align:left;vertical-align:top}th{color:#6b6b6b}</style>
 <main class="wrap" style="padding-top:24px"><a class="logo" href="/">SALE NOW ON</a> <span class="pill">Admin</span>
 <h2 style="margin-top:24px">Pages sent from Chrome · ${(it = (await db.query("select id,campaign,host,count,created_at from intake order by id desc limit 50")).rows).length}</h2>${table(it, ["campaign", "host", "count", "created_at"], "intake")}
+<h2 style="margin-top:24px">QR short links · salenowon.co.uk/go/…</h2>${table((lk = (await db.query("select code as id, code, target, fallback, starts_at, ends_at, scans, note from links order by updated_at desc")).rows), ["code", "target", "fallback", "starts_at", "ends_at", "scans", "note"], "links")}
+<form method="post" action="/admin/links" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:30px">
+<input name="code" placeholder="code e.g. dshirt" required><input name="target" placeholder="send to e.g. /deals/denim" required>
+<input name="fallback" placeholder="outside the times: /" ><input name="starts_at" type="datetime-local" title="Starts (optional)"><input name="ends_at" type="datetime-local" title="Ends (optional)">
+<input name="note" placeholder="note"><button class="btn">Save link</button></form>
 <h2 style="margin-top:24px">SALES ALERTS · ${a.length} <a style="font-size:14px" href="/admin/alerts.csv">Download CSV</a></h2>${table(a, ["email", "categories", "created_at", "unsubscribed_at"], "alerts")}
 <h2>Early access · ${e.length} <a style="font-size:14px" href="/admin/early-access.csv">Download CSV</a></h2>${table(e, ["business", "site", "kind", "categories", "other", "name", "email", "created_at"], "early")}</main>`, "text/html; charset=utf-8", { "Cache-Control": "no-store" });
+}
+
+// Short links behind QR codes: salenowon.co.uk/go/CODE. Targets are paths on this site only, so a link can never send people elsewhere.
+const CODE = /^[a-z0-9-]{2,40}$/;
+const sitePath = v => { v = String(v || "").trim(); return /^\/(?!\/)[\w\-./?=&%#]*$/.test(v) && v.length < 300 ? v : null; };
+const when = v => { if (!v) return null; const d = new Date(v); return isNaN(d) ? undefined : d; };
+async function saveLink(b) {
+  const code = String(b.code || "").toLowerCase().trim(), target = sitePath(b.target), fallback = sitePath(b.fallback || "/");
+  const st = when(b.starts_at), en = when(b.ends_at);
+  if (!CODE.test(code)) return "Code: 2 to 40 lowercase letters, numbers or dashes";
+  if (!target || !fallback) return "Target and fallback must be paths on salenowon.co.uk, starting with /";
+  if (st === undefined || en === undefined) return "Dates not understood";
+  await db.query(`insert into links (code,target,fallback,starts_at,ends_at,note) values ($1,$2,$3,$4,$5,$6)
+    on conflict (code) do update set target=$2, fallback=$3, starts_at=$4, ends_at=$5, note=$6, updated_at=now()`,
+    [code, target, fallback, st, en, clean(b.note, 120)]);
+  return null;
+}
+async function go(res, code) {
+  let dest = "/";
+  if (db && CODE.test(code)) {
+    const r = await db.query("update links set scans = scans + 1 where code=$1 returning target,fallback,starts_at,ends_at", [code]);
+    if (r.rows.length) { const l = r.rows[0], now = new Date();
+      dest = (!l.starts_at || now >= l.starts_at) && (!l.ends_at || now < l.ends_at) ? l.target : l.fallback; }
+  }
+  res.writeHead(302, { ...SEC, Location: dest, "Cache-Control": "no-store" }); res.end();
+}
+async function linksApi(req, res) {
+  const key = process.env.INTAKE_KEY;
+  if (!key || req.headers["x-sno-key"] !== key) return send(res, 401, { error: "Wrong or missing key" });
+  if (!db) return send(res, 503, { error: "No database" });
+  if (req.method === "GET") return send(res, 200, (await db.query("select * from links order by updated_at desc")).rows, "application/json", { "Cache-Control": "no-store" });
+  let body = ""; for await (const c of req) { body += c; if (body.length > 20000) return send(res, 413, { error: "Too much data" }); }
+  let b; try { b = JSON.parse(body); } catch { return send(res, 400, { error: "Bad data" }); }
+  const err = await saveLink(b); send(res, err ? 400 : 200, err ? { error: err } : { ok: true, url: "https://salenowon.co.uk/go/" + b.code });
 }
 
 async function intake(req, res) {
@@ -183,6 +232,9 @@ http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, "http://x");
     if (url.pathname === "/api/intake") return intake(req, res);
+    if (url.pathname === "/api/links") return linksApi(req, res);
+    const gm = /^\/go\/([^/]+)\/?$/.exec(url.pathname);
+    if (gm) return go(res, decodeURIComponent(gm[1]).toLowerCase());
     if (req.method === "POST" && url.pathname === "/api/alerts") return api(req, res, "alerts");
     if (req.method === "POST" && url.pathname === "/api/early-access") return api(req, res, "early");
     if (url.pathname === "/health") return send(res, 200, { ok: true, db: !!db });

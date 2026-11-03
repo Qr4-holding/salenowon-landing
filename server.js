@@ -158,6 +158,7 @@ http.createServer(async (req, res) => {
     let p = decodeURIComponent(url.pathname);
     if (p === "/") p = "/index.html";
     if (p === "/privacy") p = "/privacy.html";
+    if (p === "/bot") p = "/bot.html";
     const file = path.normalize(path.join(PUB, p));
     if (!file.startsWith(PUB)) return send(res, 403, "Forbidden", "text/plain");
     serveFile(req, res, file);

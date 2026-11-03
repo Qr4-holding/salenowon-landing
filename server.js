@@ -5,6 +5,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { Pool } = require("pg");
+const QRCode = require("qrcode");
 
 const PORT = +process.env.PORT || 3000;
 const PUB = path.join(__dirname, "public");
@@ -30,7 +31,12 @@ async function migrate() {
           products jsonb not null, count int not null, created_at timestamptz not null default now());
         create table if not exists links (
           code text primary key, target text not null, fallback text not null default '/', starts_at timestamptz, ends_at timestamptz,
-          note text, scans int not null default 0, created_at timestamptz not null default now(), updated_at timestamptz not null default now());`);
+          note text, scans int not null default 0, created_at timestamptz not null default now(), updated_at timestamptz not null default now());
+        create table if not exists events (
+          id bigserial primary key, ts timestamptz not null default now(), kind text not null, path text, code text,
+          ref text, src text, visitor text, device text);
+        create index if not exists events_ts on events (ts);
+        delete from events where ts < now() - interval '13 months';`);
       return console.log("db ready");
     } catch (e) { console.log("waiting for db…", e.message); await new Promise(r => setTimeout(r, 3000)); }
   }
@@ -148,32 +154,71 @@ async function admin(req, res, url) {
     if (err) return send(res, 400, err + ". Go back and try again.", "text/plain; charset=utf-8");
     res.writeHead(303, { Location: "/admin" }); return res.end();
   }
+  const qm = /^\/admin\/qr\/([a-z0-9-]{2,40})\.(svg|png)$/.exec(url.pathname);
+  if (qm) {
+    const link = "https://salenowon.co.uk/go/" + qm[1], opt = { errorCorrectionLevel: "M", margin: 2, color: { dark: "#222222", light: "#ffffff" } };
+    const disp = { "Content-Disposition": `attachment; filename=salenowon-qr-${qm[1]}.${qm[2]}` };
+    if (qm[2] === "svg") return send(res, 200, await QRCode.toString(link, { ...opt, type: "svg" }), "image/svg+xml", disp);
+    return send(res, 200, await QRCode.toBuffer(link, { ...opt, width: 1200 }), "image/png", disp);
+  }
+  if (url.pathname === "/admin/stats") return stats(res, url);
   const im = /^\/admin\/intake\/(\d+)\.json$/.exec(url.pathname);
   if (im) { const r = await db.query("select * from intake where id=$1", [+im[1]]); return send(res, r.rows.length ? 200 : 404, r.rows[0] || { error: "not found" }); }
   if (url.pathname === "/admin/intake.json") { const r = await db.query("select id,campaign,host,page_url,count,created_at from intake order by id desc limit 200"); return send(res, 200, r.rows); }
   let it = [], lk = [];
+  const dl = v => v ? v.toLocaleString("sv-SE", { timeZone: "Europe/London" }).slice(0, 16).replace(" ", "T") : "";
+  const linkForm = l => `<h3 id="edit" style="margin:4px 0 8px">${l ? "Change link /go/" + esc(l.code) : "New short link"}</h3>
+<p class="small" style="margin:0 0 8px">Times are UK time. Outside the start and end times, a scan goes to the fallback page instead.</p>
+<form method="post" action="/admin/links" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:30px">
+<label>Code<input name="code" placeholder="e.g. dshirt" required value="${esc(l?.code || "")}" ${l ? "readonly" : ""}></label>
+<label>Send people to<input name="target" placeholder="/deals/denim" required value="${esc(l?.target || "")}"></label>
+<label>Fallback page<input name="fallback" placeholder="/" value="${esc(l?.fallback || "/")}"></label>
+<label>Starts<input name="starts_at" type="datetime-local" value="${dl(l?.starts_at)}"></label>
+<label>Ends<input name="ends_at" type="datetime-local" value="${dl(l?.ends_at)}"></label>
+<label>Note<input name="note" value="${esc(l?.note || "")}"></label>
+<button class="btn" style="align-self:end">Save link</button>${l ? '<a href="/admin#edit" style="align-self:end">Cancel</a>' : ""}</form>`;
   const a = (await db.query("select id,email,categories,created_at,unsubscribed_at from alert_signups order by created_at desc")).rows;
   const e = (await db.query("select id,business,site,kind,categories,other,name,email,created_at from early_access order by created_at desc")).rows;
   if (url.pathname === "/admin/alerts.csv") return send(res, 200, csv(a), "text/csv", { "Content-Disposition": "attachment; filename=sales-alerts.csv" });
   if (url.pathname === "/admin/early-access.csv") return send(res, 200, csv(e), "text/csv", { "Content-Disposition": "attachment; filename=early-access.csv" });
-  const table = (rows, cols, t) => `<table><tr>${cols.map(c => `<th>${c}</th>`).join("")}<th></th></tr>${rows.map(r => `<tr>${cols.map(c => `<td>${esc(Array.isArray(r[c]) ? r[c].join(", ") : r[c] instanceof Date ? r[c].toISOString().slice(0, 16).replace("T", " ") : r[c])}</td>`).join("")}<td><form method="post" action="/admin/delete?t=${t}&id=${r.id}" onsubmit="return confirm('Delete this entry for good?')"><button style="border:0;background:none;color:#a31c22;cursor:pointer;font:inherit">Delete</button></form></td></tr>`).join("")}</table>`;
+  const cellOf = (c, v) => c === "tools" ? `<a href="/admin?edit=${encodeURIComponent(v)}#edit">Edit</a> · <a href="/admin/qr/${encodeURIComponent(v)}.png">QR png</a> · <a href="/admin/qr/${encodeURIComponent(v)}.svg">svg</a>` : esc(Array.isArray(v) ? v.join(", ") : v instanceof Date ? v.toLocaleString("en-GB", { timeZone: "Europe/London", dateStyle: "short", timeStyle: "short" }) : v);
+  const table = (rows, cols, t) => `<table><tr>${cols.map(c => `<th>${c}</th>`).join("")}<th></th></tr>${rows.map(r => `<tr>${cols.map(c => `<td>${cellOf(c, r[c])}</td>`).join("")}<td><form method="post" action="/admin/delete?t=${t}&id=${r.id}" onsubmit="return confirm('Delete this entry for good?')"><button style="border:0;background:none;color:#a31c22;cursor:pointer;font:inherit">Delete</button></form></td></tr>`).join("")}</table>`;
   send(res, 200, `<!doctype html><meta name=viewport content="width=device-width,initial-scale=1"><title>SNO admin</title>
 <link rel="stylesheet" href="/style.css"><style>table{border-collapse:collapse;width:100%;font-size:14px;margin:10px 0 30px}th,td{border-bottom:1px solid #e2e2e2;padding:7px;text-align:left;vertical-align:top}th{color:#6b6b6b}</style>
-<main class="wrap" style="padding-top:24px"><a class="logo" href="/">SALE NOW ON</a> <span class="pill">Admin</span>
+<main class="wrap" style="padding-top:24px"><a class="logo" href="/">SALE NOW ON</a> <span class="pill">Admin</span> <a href="/admin/stats" style="margin-left:12px;font-weight:700">Analytics →</a>
 <h2 style="margin-top:24px">Pages sent from Chrome · ${(it = (await db.query("select id,campaign,host,count,created_at from intake order by id desc limit 50")).rows).length}</h2>${table(it, ["campaign", "host", "count", "created_at"], "intake")}
-<h2 style="margin-top:24px">QR short links · salenowon.co.uk/go/…</h2>${table((lk = (await db.query("select code as id, code, target, fallback, starts_at, ends_at, scans, note from links order by updated_at desc")).rows), ["code", "target", "fallback", "starts_at", "ends_at", "scans", "note"], "links")}
-<form method="post" action="/admin/links" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:30px">
-<input name="code" placeholder="code e.g. dshirt" required><input name="target" placeholder="send to e.g. /deals/denim" required>
-<input name="fallback" placeholder="outside the times: /" ><input name="starts_at" type="datetime-local" title="Starts (optional)"><input name="ends_at" type="datetime-local" title="Ends (optional)">
-<input name="note" placeholder="note"><button class="btn">Save link</button></form>
+<h2 style="margin-top:24px">QR short links · salenowon.co.uk/go/…</h2>${(lk = (await db.query("select code as id, code, target, fallback, starts_at, ends_at, scans, note from links order by updated_at desc")).rows, "")}${table(lk.map(l => ({ ...l, tools: l.code })), ["code", "target", "fallback", "starts_at", "ends_at", "scans", "note", "tools"], "links")}
+${linkForm(lk.find(l => l.code === url.searchParams.get("edit")))}
 <h2 style="margin-top:24px">SALES ALERTS · ${a.length} <a style="font-size:14px" href="/admin/alerts.csv">Download CSV</a></h2>${table(a, ["email", "categories", "created_at", "unsubscribed_at"], "alerts")}
 <h2>Early access · ${e.length} <a style="font-size:14px" href="/admin/early-access.csv">Download CSV</a></h2>${table(e, ["business", "site", "kind", "categories", "other", "name", "email", "created_at"], "early")}</main>`, "text/html; charset=utf-8", { "Cache-Control": "no-store" });
+}
+
+// Visit counting without cookies: an anonymous visitor code from IP + browser + today's date, so it cannot follow anyone across days.
+const BOTS = /bot|crawl|spider|slurp|preview|facebookexternalhit|embedly|curl|wget|python|headless|monitor|uptime|lighthouse/i;
+function visitorOf(req) {
+  const ip = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "").split(",")[0].trim();
+  const day = new Date().toISOString().slice(0, 10);
+  return crypto.createHash("sha256").update(`${process.env.DB_PASSWORD || "sno"}|${day}|${ip}|${req.headers["user-agent"] || ""}`).digest("hex").slice(0, 16);
+}
+const deviceOf = ua => /ipad|tablet/i.test(ua) ? "tablet" : /mobi|android|iphone/i.test(ua) ? "phone" : "desktop";
+function track(req, kind, extra = {}) {
+  const ua = req.headers["user-agent"] || "";
+  if (!db || BOTS.test(ua) || !ua) return;
+  let ref = null; try { const r = new URL(req.headers.referer || ""); if (!/salenowon\.co\.uk$/.test(r.hostname)) ref = r.hostname.replace(/^www\./, ""); } catch {}
+  const u = new URL(req.url, "http://x");
+  const src = clean(u.searchParams.get("utm_source") || u.searchParams.get("src") || extra.src || "", 40) || null;
+  db.query("insert into events (kind, path, code, ref, src, visitor, device) values ($1,$2,$3,$4,$5,$6,$7)",
+    [kind, clean(u.pathname, 200), extra.code || null, ref, src, visitorOf(req), deviceOf(ua)]).catch(e => console.error("track", e.message));
 }
 
 // Short links behind QR codes: salenowon.co.uk/go/CODE. Targets are paths on this site only, so a link can never send people elsewhere.
 const CODE = /^[a-z0-9-]{2,40}$/;
 const sitePath = v => { v = String(v || "").trim(); return /^\/(?!\/)[\w\-./?=&%#]*$/.test(v) && v.length < 300 ? v : null; };
-const when = v => { if (!v) return null; const d = new Date(v); return isNaN(d) ? undefined : d; };
+// A time without a zone (from the admin form) is UK wall-clock time, GMT or BST as it falls.
+const ukOffset = d => { const p = new Date(d.toLocaleString("en-US", { timeZone: "Europe/London" })); const u = new Date(d.toLocaleString("en-US", { timeZone: "UTC" })); return p - u; };
+const when = v => { if (!v) return null; v = String(v);
+  if (/^\d{4}-\d\d-\d\dT\d\d:\d\d(:\d\d)?$/.test(v)) { const z = new Date(v + "Z"); if (isNaN(z)) return undefined; return new Date(z - ukOffset(new Date(z - ukOffset(z)))); }
+  const d = new Date(v); return isNaN(d) ? undefined : d; };
 async function saveLink(b) {
   const code = String(b.code || "").toLowerCase().trim(), target = sitePath(b.target), fallback = sitePath(b.fallback || "/");
   const st = when(b.starts_at), en = when(b.ends_at);
@@ -185,11 +230,12 @@ async function saveLink(b) {
     [code, target, fallback, st, en, clean(b.note, 120)]);
   return null;
 }
-async function go(res, code) {
+async function go(req, res, code) {
   let dest = "/";
   if (db && CODE.test(code)) {
-    const r = await db.query("update links set scans = scans + 1 where code=$1 returning target,fallback,starts_at,ends_at", [code]);
-    if (r.rows.length) { const l = r.rows[0], now = new Date();
+    const human = !BOTS.test(req.headers["user-agent"] || "x") && !!req.headers["user-agent"];
+    const r = await db.query("update links set scans = scans + $2 where code=$1 returning target,fallback,starts_at,ends_at", [code, human ? 1 : 0]);
+    if (r.rows.length) { track(req, "scan", { code, src: "qr" }); const l = r.rows[0], now = new Date();
       dest = (!l.starts_at || now >= l.starts_at) && (!l.ends_at || now < l.ends_at) ? l.target : l.fallback; }
   }
   res.writeHead(302, { ...SEC, Location: dest, "Cache-Control": "no-store" }); res.end();
@@ -202,6 +248,79 @@ async function linksApi(req, res) {
   let body = ""; for await (const c of req) { body += c; if (body.length > 20000) return send(res, 413, { error: "Too much data" }); }
   let b; try { b = JSON.parse(body); } catch { return send(res, 400, { error: "Bad data" }); }
   const err = await saveLink(b); send(res, err ? 400 : 200, err ? { error: err } : { ok: true, url: "https://salenowon.co.uk/go/" + b.code });
+}
+
+// Analytics dashboard: /admin/stats?days=7|30|90
+function barChart(rows, key, label) {
+  const W = 900, H = 180, pad = 28, rp = 24, n = rows.length, max = Math.max(1, ...rows.map(r => r[key]));
+  const bw = (W - pad - rp) / n, nice = max <= 5 ? max : Math.ceil(max / 5) * 5;
+  const bars = rows.map((r, i) => {
+    const h = Math.round((r[key] / nice) * (H - 30)), x = pad + i * bw, y = H - 20 - h, d = r.day.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "Europe/London" });
+    return `<g><rect x="${x.toFixed(1)}" y="0" width="${bw.toFixed(1)}" height="${H - 20}" fill="transparent"><title>${d}: ${r[key]} ${label}</title></rect>` +
+      (h ? `<rect x="${(x + 1).toFixed(1)}" y="${y}" width="${Math.max(1, bw - 2).toFixed(1)}" height="${h}" rx="2" fill="#d7262d" pointer-events="none"/>` : "") + `</g>`;
+  }).join("");
+  const lab = i => rows[i] ? `<text x="${(pad + i * bw + bw / 2).toFixed(1)}" y="${H - 4}" text-anchor="${i === 0 ? "start" : i === n - 1 ? "end" : "middle"}">${rows[i].day.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "Europe/London" })}</text>` : "";
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="${label} per day" style="font:12px Poppins,sans-serif;fill:#6b6b6b;display:block">
+<line x1="${pad}" x2="${W - rp}" y1="10" y2="10" stroke="#eee"/><text x="${pad - 6}" y="14" text-anchor="end">${nice}</text>
+<line x1="${pad}" x2="${W - rp}" y1="${H - 20}" y2="${H - 20}" stroke="#ccc"/><text x="${pad - 6}" y="${H - 20}" text-anchor="end">0</text>${bars}${lab(0)}${lab(Math.floor(n / 2))}${lab(n - 1)}</svg>`;
+}
+async function stats(res, url) {
+  const days = [7, 30, 90].includes(+url.searchParams.get("days")) ? +url.searchParams.get("days") : 30;
+  const q = async (sql, args = []) => (await db.query(sql, args)).rows;
+  const tile = async (from, to) => (await q(`select
+      count(*) filter (where kind='view') views,
+      count(distinct (visitor, ts::date)) filter (where kind in ('view','scan','play')) visitors,
+      count(*) filter (where kind='scan') scans,
+      count(distinct (visitor, path, ts::date)) filter (where kind='play') plays
+    from events where ts >= now() - $1::interval and ts < now() - $2::interval`, [from + " days", to + " days"]))[0];
+  const cur = await tile(days, 0), prev = await tile(days * 2, days);
+  const today = (await q(`select count(distinct visitor) n from events where ts >= date_trunc('day', now() at time zone 'Europe/London') at time zone 'Europe/London'`))[0].n;
+  const daily = await q(`select d::date as day, coalesce(v.views,0)::int views, coalesce(v.scans,0)::int scans, coalesce(v.visitors,0)::int visitors
+    from generate_series((now() at time zone 'Europe/London')::date - ($1::int - 1), (now() at time zone 'Europe/London')::date, '1 day') d
+    left join (select (ts at time zone 'Europe/London')::date as day, count(*) filter (where kind='view') views, count(*) filter (where kind='scan') scans,
+               count(distinct visitor) visitors from events group by 1) v on v.day = d::date order by 1`, [days]);
+  const codes = await q(`select l.code, l.target, l.note, l.scans all_time,
+      count(e.id) filter (where e.ts >= now() - $1::interval) scans, count(distinct (e.visitor, e.ts::date)) filter (where e.ts >= now() - $1::interval) people,
+      max(e.ts) last_scan
+    from links l left join events e on e.kind='scan' and e.code=l.code group by l.code order by scans desc, all_time desc`, [days + " days"]);
+  const sources = await q(`select coalesce(src, ref, 'Direct or typed in') source, count(*) n from events where kind in ('view','scan') and ts >= now() - $1::interval group by 1 order by 2 desc limit 12`, [days + " days"]);
+  const devices = await q(`select device, count(distinct (visitor, ts::date)) n from events where ts >= now() - $1::interval group by 1 order by 2 desc`, [days + " days"]);
+  const pages = await q(`select case path when '/' then 'Home page' when '/privacy' then 'Privacy notice' when '/bot' then 'Robot information' else path end as path, count(*) n from events where kind='view' and ts >= now() - $1::interval group by 1 order by 2 desc limit 10`, [days + " days"]);
+  const fmt = n => Number(n).toLocaleString("en-GB");
+  const change = (a, b) => { a = +a; b = +b; if (!b) return a ? `<span class="chg">new this period</span>` : `<span class="chg">no activity yet</span>`;
+    const pc = Math.round(100 * (a - b) / b); return `<span class="chg">${pc >= 0 ? "▲ up" : "▼ down"} ${Math.abs(pc)}% on the previous ${days} days</span>`; };
+  const T = (title, val, prevVal, note) => `<div class="tile"><div class="tl">${title}</div><div class="tv">${fmt(val)}</div>${change(val, prevVal)}${note ? `<div class="tn">${note}</div>` : ""}</div>`;
+  const total = devices.reduce((a, r) => a + +r.n, 0) || 1;
+  const tbl = (rows, cols, heads) => rows.length ? `<div style="overflow-x:auto"><table><tr>${heads.map(h => `<th>${h}</th>`).join("")}</tr>${rows.map(r => `<tr>${cols.map(c => `<td>${typeof c === "function" ? c(r) : esc(r[c] instanceof Date ? r[c].toLocaleString("en-GB", { timeZone: "Europe/London", dateStyle: "short", timeStyle: "short" }) : r[c] ?? "")}</td>`).join("")}</tr>`).join("")}</table></div>` : `<p class="small">Nothing yet.</p>`;
+  send(res, 200, `<!doctype html><meta name=viewport content="width=device-width,initial-scale=1"><title>SNO analytics</title>
+<link rel="stylesheet" href="/style.css"><style>
+table{border-collapse:collapse;width:100%;font-size:14px;margin:8px 0 26px}th,td{border-bottom:1px solid #e2e2e2;padding:7px;text-align:left;vertical-align:top}th{color:#6b6b6b;font-weight:600}
+body{overflow-x:hidden}.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:14px 0 26px}
+.tile{border:1.5px solid #e2e2e2;border-radius:14px;padding:14px 16px;background:#fff}.tl{font-size:13px;color:#6b6b6b;font-weight:600}
+.tv{font-size:34px;font-weight:900;letter-spacing:-1px;margin:2px 0}.chg{font-size:12px;color:#6b6b6b}.tn{font-size:12px;color:#6b6b6b;margin-top:4px}
+.box{border:1.5px solid #e2e2e2;border-radius:14px;padding:14px 16px;margin:0 0 22px;background:#fff}.box h3{margin:0 0 6px;font-size:16px}
+.range a{display:inline-block;padding:6px 12px;border:1.5px solid #e2e2e2;border-radius:20px;margin-right:6px;color:#222;text-decoration:none;font-weight:600;font-size:14px}.range a.on{border-color:#d7262d;color:#d7262d}
+.bar{display:inline-block;height:8px;border-radius:4px;background:#d7262d;vertical-align:middle;margin-right:8px}
+</style>
+<main class="wrap" style="padding-top:24px;max-width:1000px"><a class="logo" href="/">SALE NOW ON</a> <span class="pill">Analytics</span> <a href="/admin" style="margin-left:12px;font-weight:700">← Admin and QR links</a>
+<p class="range" style="margin-top:20px">${[7, 30, 90].map(d => `<a class="${d === days ? "on" : ""}" href="?days=${d}">Last ${d} days</a>`).join("")}</p>
+<div class="tiles">
+${T("Unique visitors today", today, null, "People on the site so far today (UK time)").replace(/<span class="chg">.*?<\/span>/, "")}
+${T(`Page views, last ${days} days`, cur.views, prev.views)}
+${T(`Visitors, last ${days} days`, cur.visitors, prev.visitors, "Each person counted once per day")}
+${T(`QR code scans, last ${days} days`, cur.scans, prev.scans)}
+${T(`Video plays, last ${days} days`, cur.plays, prev.plays, "Promo video started on the site")}
+</div>
+<div class="box"><h3>Page views per day</h3>${barChart(daily, "views", "page views")}</div>
+<div class="box"><h3>QR code scans per day</h3>${barChart(daily, "scans", "QR scans")}</div>
+<h2>QR codes</h2>${tbl(codes, [r => `<a href="/admin?edit=${encodeURIComponent(r.code)}#edit">${esc(r.code)}</a>`, "target", "scans", "people", "all_time", "last_scan", "note"],
+  ["Code", "Sends people to", `Scans, ${days} days`, `People, ${days} days`, "Scans, all time", "Last scan", "Note"])}
+<h2>Where visits came from</h2>${tbl(sources, ["source", "n"], ["Source (link tag, or referring site)", "Visits and scans"])}
+<h2>Devices</h2>${tbl(devices, [r => `<span class="bar" style="width:${Math.round(120 * r.n / total)}px"></span>${esc(r.device)}`, r => `${fmt(r.n)} (${Math.round(100 * r.n / total)}%)`], ["Device", "Visitors"])}
+<h2>Pages</h2>${tbl(pages, ["path", "n"], ["Page", "Views"])}
+<details style="margin-bottom:30px"><summary style="cursor:pointer;font-weight:700">Day-by-day numbers</summary>${tbl(daily.slice().reverse(), [r => r.day.toLocaleDateString("en-GB", { timeZone: "Europe/London" }), "views", "visitors", "scans"], ["Day", "Page views", "Visitors", "QR scans"])}</details>
+<p class="small">Counted without cookies: each visitor gets an anonymous code made from their connection and today's date, which changes every day, so nobody is followed from one day to the next. Robots and link previews are left out. Records older than 13 months are deleted.</p>
+</main>`, "text/html; charset=utf-8", { "Cache-Control": "no-store" });
 }
 
 async function intake(req, res) {
@@ -231,23 +350,26 @@ const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers
 http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, "http://x");
-    if (url.pathname === "/api/intake") return intake(req, res);
-    if (url.pathname === "/api/links") return linksApi(req, res);
+    if (url.pathname === "/api/intake") return await intake(req, res);
+    if (url.pathname === "/api/links") return await linksApi(req, res);
     const gm = /^\/go\/([^/]+)\/?$/.exec(url.pathname);
-    if (gm) return go(res, decodeURIComponent(gm[1]).toLowerCase());
-    if (req.method === "POST" && url.pathname === "/api/alerts") return api(req, res, "alerts");
-    if (req.method === "POST" && url.pathname === "/api/early-access") return api(req, res, "early");
+    if (gm) return await go(req, res, decodeURIComponent(gm[1]).toLowerCase());
+    if (req.method === "POST" && url.pathname === "/api/alerts") return await api(req, res, "alerts");
+    if (req.method === "POST" && url.pathname === "/api/early-access") return await api(req, res, "early");
     if (url.pathname === "/health") return send(res, 200, { ok: true, db: !!db });
-    if (url.pathname.startsWith("/admin")) return admin(req, res, url);
+    if (url.pathname.startsWith("/admin")) return await admin(req, res, url);
     if (req.method !== "GET" && req.method !== "HEAD") return send(res, 405, "Method not allowed", "text/plain");
     let p = decodeURIComponent(url.pathname);
+    if (req.method === "GET" && ["/", "/privacy", "/bot", "/index.html"].includes(p)) track(req, "view");
+    if (req.method === "GET" && /\.mp4$/.test(p) && (!req.headers.range || /^bytes=0-/.test(req.headers.range))) track(req, "play");
     if (p === "/") p = "/index.html";
     if (p === "/privacy") p = "/privacy.html";
     if (p === "/bot") p = "/bot.html";
     const file = path.normalize(path.join(PUB, p));
     if (!file.startsWith(PUB)) return send(res, 403, "Forbidden", "text/plain");
     serveFile(req, res, file);
-  } catch (e) { console.error(e); send(res, 500, "Error", "text/plain"); }
+  } catch (e) { console.error(e); if (!res.headersSent) send(res, 500, "Something went wrong", "text/plain"); else res.end(); }
 }).listen(PORT, () => console.log("Sale Now On landing on :" + PORT));
 
+process.on("unhandledRejection", e => console.error("unhandled", e));
 migrate();

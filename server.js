@@ -37,6 +37,7 @@ async function migrate() {
           ref text, src text, visitor text, device text);
         create index if not exists events_ts on events (ts);
         delete from events where ts < now() - interval '13 months';`);
+      await D.migrate();
       return console.log("db ready");
     } catch (e) { console.log("waiting for db…", e.message); await new Promise(r => setTimeout(r, 3000)); }
   }
@@ -183,6 +184,7 @@ async function admin(req, res, url) {
     return send(res, 200, await QRCode.toBuffer(link, { ...opt, width: 1200 }), "image/png", disp);
   }
   if (url.pathname === "/admin/stats") return stats(res, url);
+  if (url.pathname === "/admin/deals") return D.adminDeals(req, res, url);
   const im = /^\/admin\/intake\/(\d+)\.json$/.exec(url.pathname);
   if (im) { const r = await db.query("select * from intake where id=$1", [+im[1]]); return send(res, r.rows.length ? 200 : 404, r.rows[0] || { error: "not found" }); }
   if (url.pathname === "/admin/intake.json") { const r = await db.query("select id,campaign,host,page_url,count,created_at from intake order by id desc limit 200"); return send(res, 200, r.rows); }
@@ -206,7 +208,7 @@ async function admin(req, res, url) {
   const table = (rows, cols, t) => `<table><tr>${cols.map(c => `<th>${c}</th>`).join("")}<th></th></tr>${rows.map(r => `<tr>${cols.map(c => `<td>${cellOf(c, r[c])}</td>`).join("")}<td><form method="post" action="/admin/delete?t=${t}&id=${r.id}" onsubmit="return confirm('Delete this entry for good?')"><button style="border:0;background:none;color:#a31c22;cursor:pointer;font:inherit">Delete</button></form></td></tr>`).join("")}</table>`;
   send(res, 200, `<!doctype html><meta name=viewport content="width=device-width,initial-scale=1"><title>SNO admin</title>
 <link rel="stylesheet" href="/style.css"><style>table{border-collapse:collapse;width:100%;font-size:14px;margin:10px 0 30px}th,td{border-bottom:1px solid #e2e2e2;padding:7px;text-align:left;vertical-align:top}th{color:#6b6b6b}</style>
-<main class="wrap" style="padding-top:24px"><a class="logo" href="/">SALE NOW ON</a> <span class="pill">Admin</span> <a href="/admin/stats" style="margin-left:12px;font-weight:700">Analytics →</a> <a href="/admin/logout" style="margin-left:12px;font-size:13px;color:#6b6b6b">Sign out</a>
+<main class="wrap" style="padding-top:24px"><a class="logo" href="/">SALE NOW ON</a> <span class="pill">Admin</span> <a href="/admin/stats" style="margin-left:12px;font-weight:700">Analytics →</a> <a href="/admin/deals" style="margin-left:12px;font-weight:700">Deals →</a> <a href="/admin/logout" style="margin-left:12px;font-size:13px;color:#6b6b6b">Sign out</a>
 <h2 style="margin-top:24px">Pages sent from Chrome · ${(it = (await db.query("select id,campaign,host,count,created_at from intake order by id desc limit 50")).rows).length}</h2>${table(it, ["campaign", "host", "count", "created_at"], "intake")}
 <h2 style="margin-top:24px">QR short links · salenowon.co.uk/go/…</h2>${(lk = (await db.query("select code as id, code, target, fallback, starts_at, ends_at, scans, note from links order by updated_at desc")).rows, "")}${table(lk.map(l => ({ ...l, tools: l.code })), ["code", "target", "fallback", "starts_at", "ends_at", "scans", "note", "tools"], "links")}
 ${linkForm(lk.find(l => l.code === url.searchParams.get("edit")))}
@@ -292,7 +294,8 @@ async function stats(res, url) {
       count(*) filter (where kind='view') views,
       count(distinct (visitor, ts::date)) filter (where kind in ('view','scan','play')) visitors,
       count(*) filter (where kind='scan') scans,
-      count(distinct (visitor, path, ts::date)) filter (where kind='play') plays
+      count(distinct (visitor, path, ts::date)) filter (where kind='play') plays,
+      count(*) filter (where kind='out') outs
     from events where ts >= now() - $1::interval and ts < now() - $2::interval`, [from + " days", to + " days"]))[0];
   const cur = await tile(days, 0), prev = await tile(days * 2, days);
   const today = (await q(`select count(distinct visitor) n from events where ts >= date_trunc('day', now() at time zone 'Europe/London') at time zone 'Europe/London'`))[0].n;
@@ -306,7 +309,7 @@ async function stats(res, url) {
     from links l left join events e on e.kind='scan' and e.code=l.code group by l.code order by scans desc, all_time desc`, [days + " days"]);
   const sources = await q(`select coalesce(src, ref, 'Direct or typed in') source, count(*) n from events where kind in ('view','scan') and ts >= now() - $1::interval group by 1 order by 2 desc limit 12`, [days + " days"]);
   const devices = await q(`select device, count(distinct (visitor, ts::date)) n from events where ts >= now() - $1::interval group by 1 order by 2 desc`, [days + " days"]);
-  const pages = await q(`select case path when '/' then 'Home page' when '/privacy' then 'Privacy notice' when '/bot' then 'Robot information' else path end as path, count(*) n from events where kind='view' and ts >= now() - $1::interval group by 1 order by 2 desc limit 10`, [days + " days"]);
+  const pages = await q(`select case when path = '/' then 'Home page' when path = '/privacy' then 'Privacy notice' when path = '/bot' then 'Robot information' when path = '/deals' then 'Deals hub' when path like '/d/%' then 'Deal ' || substr(path, 4) else path end as path, count(*) n from events where kind='view' and ts >= now() - $1::interval group by 1 order by 2 desc limit 10`, [days + " days"]);
   const fmt = n => Number(n).toLocaleString("en-GB");
   const change = (a, b) => { a = +a; b = +b; if (!b) return a ? `<span class="chg">new this period</span>` : `<span class="chg">no activity yet</span>`;
     const pc = Math.round(100 * (a - b) / b); return `<span class="chg">${pc >= 0 ? "▲ up" : "▼ down"} ${Math.abs(pc)}% on the previous ${days} days</span>`; };
@@ -323,7 +326,7 @@ body{overflow-x:hidden}.tiles{display:grid;grid-template-columns:repeat(auto-fit
 .range a{display:inline-block;padding:6px 12px;border:1.5px solid #e2e2e2;border-radius:20px;margin-right:6px;color:#222;text-decoration:none;font-weight:600;font-size:14px}.range a.on{border-color:#d7262d;color:#d7262d}
 .bar{display:inline-block;height:8px;border-radius:4px;background:#d7262d;vertical-align:middle;margin-right:8px}
 </style>
-<main class="wrap" style="padding-top:24px;max-width:1000px"><a class="logo" href="/">SALE NOW ON</a> <span class="pill">Analytics</span> <a href="/admin" style="margin-left:12px;font-weight:700">← Admin and QR links</a>
+<main class="wrap" style="padding-top:24px;max-width:1000px"><a class="logo" href="/">SALE NOW ON</a> <span class="pill">Analytics</span> <a href="/admin" style="margin-left:12px;font-weight:700">← Admin and QR links</a> <a href="/admin/deals" style="margin-left:12px;font-weight:700">Deals</a>
 <p class="range" style="margin-top:20px">${[7, 30, 90].map(d => `<a class="${d === days ? "on" : ""}" href="?days=${d}">Last ${d} days</a>`).join("")}</p>
 <div class="tiles">
 ${T("Unique visitors today", today, null, "People on the site so far today (UK time)").replace(/<span class="chg">.*?<\/span>/, "")}
@@ -331,6 +334,7 @@ ${T(`Page views, last ${days} days`, cur.views, prev.views)}
 ${T(`Visitors, last ${days} days`, cur.visitors, prev.visitors, "Each person counted once per day")}
 ${T(`QR code scans, last ${days} days`, cur.scans, prev.scans)}
 ${T(`Video plays, last ${days} days`, cur.plays, prev.plays, "Promo video started on the site")}
+${T(`Clicks to shops, last ${days} days`, cur.outs, prev.outs, "Go to the shop pressed on a deal page")}
 </div>
 <div class="box"><h3>Page views per day</h3>${barChart(daily, "views", "page views")}</div>
 <div class="box"><h3>QR code scans per day</h3>${barChart(daily, "scans", "QR scans")}</div>
@@ -373,6 +377,13 @@ http.createServer(async (req, res) => {
     const url = new URL(req.url, "http://x");
     if (url.pathname === "/api/intake") return await intake(req, res);
     if (url.pathname === "/api/links") return await linksApi(req, res);
+    if (url.pathname === "/api/deals/from-intake") {
+      if (req.method !== "POST" || !process.env.INTAKE_KEY || req.headers["x-sno-key"] !== process.env.INTAKE_KEY) return send(res, 401, { error: "Wrong or missing key" });
+      return send(res, 200, await D.fromIntake(+url.searchParams.get("id")));
+    }
+    if (db && (url.pathname === "/deals" || url.pathname === "/deals/")) return await D.hub(req, res, url);
+    const dm = /^\/(d|out)\/(\d{1,9})\/?$/.exec(url.pathname);
+    if (db && dm) return dm[1] === "d" ? await D.dealPage(req, res, dm[2]) : await D.out(req, res, dm[2]);
     if (url.pathname === "/api/admin-link") {
       if (req.method === "OPTIONS") return send(res, 204, "", "text/plain", CORS);
       const key = process.env.INTAKE_KEY;
@@ -398,5 +409,6 @@ http.createServer(async (req, res) => {
   } catch (e) { console.error(e); if (!res.headersSent) send(res, 500, "Something went wrong", "text/plain"); else res.end(); }
 }).listen(PORT, () => console.log("Sale Now On landing on :" + PORT));
 
+const D = require("./deals")({ db, esc, clean, send, SEC, track, authed });
 process.on("unhandledRejection", e => console.error("unhandled", e));
 migrate();

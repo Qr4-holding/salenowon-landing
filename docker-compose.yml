@@ -1,6 +1,6 @@
 # Sale Now On coming-soon page + its own PostgreSQL, as deployed on the Hostinger VPS (Docker manager project "salenowon").
 # Project environment (set on the server only, never in this repo):
-#   DB_PASSWORD, ADMIN_PASSWORD, SITE_HOSTS (domains Caddy serves), CONTACT_EMAIL, CONTROLLER
+#   DB_PASSWORD, ADMIN_PASSWORD, SITE_HOSTS (domains Caddy serves), CONTACT_EMAIL, CONTROLLER, INTAKE_KEY
 # Updating: push to main, then restart the project (the web container clones main on start).
 services:
   web:
@@ -13,6 +13,7 @@ services:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - CONTACT_EMAIL=${CONTACT_EMAIL:-}
       - CONTROLLER=${CONTROLLER:-}
+      - INTAKE_KEY=${INTAKE_KEY:-}
     labels:
       caddy: ${SITE_HOSTS}
       caddy.reverse_proxy: "{{upstreams 3000}}"

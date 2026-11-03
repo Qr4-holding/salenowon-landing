@@ -24,7 +24,10 @@ async function migrate() {
         create table if not exists early_access (
           id serial primary key, business text not null, site text, kind text, categories text[] not null default '{}',
           other text, name text not null, email text not null, ip_hash text,
-          created_at timestamptz not null default now());`);
+          created_at timestamptz not null default now());
+        create table if not exists intake (
+          id serial primary key, campaign text not null, host text, page_url text, page_title text,
+          products jsonb not null, count int not null, created_at timestamptz not null default now());`);
       return console.log("db ready");
     } catch (e) { console.log("waiting for db…", e.message); await new Promise(r => setTimeout(r, 3000)); }
   }
@@ -131,10 +134,14 @@ async function admin(req, res, url) {
   if (!authed(req)) return send(res, 401, "Sign in required", "text/plain", { "WWW-Authenticate": 'Basic realm="Sale Now On admin"' });
   if (!db) return send(res, 503, "No database", "text/plain");
   if (req.method === "POST" && url.pathname === "/admin/delete") {
-    const t = url.searchParams.get("t") === "alerts" ? "alert_signups" : "early_access", id = +url.searchParams.get("id");
+    const t = { alerts: "alert_signups", early: "early_access", intake: "intake" }[url.searchParams.get("t")] || "early_access", id = +url.searchParams.get("id");
     if (id) await db.query(`delete from ${t} where id = $1`, [id]);
     res.writeHead(303, { Location: "/admin" }); return res.end();
   }
+  const im = /^\/admin\/intake\/(\d+)\.json$/.exec(url.pathname);
+  if (im) { const r = await db.query("select * from intake where id=$1", [+im[1]]); return send(res, r.rows.length ? 200 : 404, r.rows[0] || { error: "not found" }); }
+  if (url.pathname === "/admin/intake.json") { const r = await db.query("select id,campaign,host,page_url,count,created_at from intake order by id desc limit 200"); return send(res, 200, r.rows); }
+  let it = [];
   const a = (await db.query("select id,email,categories,created_at,unsubscribed_at from alert_signups order by created_at desc")).rows;
   const e = (await db.query("select id,business,site,kind,categories,other,name,email,created_at from early_access order by created_at desc")).rows;
   if (url.pathname === "/admin/alerts.csv") return send(res, 200, csv(a), "text/csv", { "Content-Disposition": "attachment; filename=sales-alerts.csv" });
@@ -143,13 +150,33 @@ async function admin(req, res, url) {
   send(res, 200, `<!doctype html><meta name=viewport content="width=device-width,initial-scale=1"><title>SNO admin</title>
 <link rel="stylesheet" href="/style.css"><style>table{border-collapse:collapse;width:100%;font-size:14px;margin:10px 0 30px}th,td{border-bottom:1px solid #e2e2e2;padding:7px;text-align:left;vertical-align:top}th{color:#6b6b6b}</style>
 <main class="wrap" style="padding-top:24px"><a class="logo" href="/">SALE NOW ON</a> <span class="pill">Admin</span>
+<h2 style="margin-top:24px">Pages sent from Chrome · ${(it = (await db.query("select id,campaign,host,count,created_at from intake order by id desc limit 50")).rows).length}</h2>${table(it, ["campaign", "host", "count", "created_at"], "intake")}
 <h2 style="margin-top:24px">SALES ALERTS · ${a.length} <a style="font-size:14px" href="/admin/alerts.csv">Download CSV</a></h2>${table(a, ["email", "categories", "created_at", "unsubscribed_at"], "alerts")}
 <h2>Early access · ${e.length} <a style="font-size:14px" href="/admin/early-access.csv">Download CSV</a></h2>${table(e, ["business", "site", "kind", "categories", "other", "name", "email", "created_at"], "early")}</main>`, "text/html; charset=utf-8", { "Cache-Control": "no-store" });
 }
 
+async function intake(req, res) {
+  const key = process.env.INTAKE_KEY;
+  if (req.method === "OPTIONS") return send(res, 204, "", "text/plain", CORS);
+  if (!key || req.headers["x-sno-key"] !== key) return send(res, 401, { error: "Wrong or missing key. Check the extension's Settings." }, "application/json", CORS);
+  if (!db) return send(res, 503, { error: "No database" }, "application/json", CORS);
+  let body = "";
+  for await (const c of req) { body += c; if (body.length > 2_000_000) return send(res, 413, { error: "Too much data" }, "application/json", CORS); }
+  let b; try { b = JSON.parse(body); } catch { return send(res, 400, { error: "Bad data" }, "application/json", CORS); }
+  const items = (Array.isArray(b.products) ? b.products : []).slice(0, 300).map(p => ({
+    name: clean(p.name, 160), was: +p.was || 0, now: +p.now || 0, cur: clean(p.cur, 3), off: Math.round(+p.off || 0),
+    url: clean(p.url, 600), image: clean(p.image, 800) })).filter(p => p.name && p.now > 0 && p.was > p.now);
+  if (!items.length) return send(res, 400, { error: "No products in that page" }, "application/json", CORS);
+  const r = await db.query("insert into intake (campaign, host, page_url, page_title, products, count) values ($1,$2,$3,$4,$5,$6) returning id",
+    [clean(b.campaign, 60), clean(b.host, 120), clean(b.page_url, 800), clean(b.page_title, 200), JSON.stringify(items), items.length]);
+  send(res, 200, { ok: true, id: r.rows[0].id, count: items.length }, "application/json", CORS);
+}
+const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Content-Type, X-SNO-Key", "Access-Control-Allow-Methods": "POST, OPTIONS" };
+
 http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, "http://x");
+    if (url.pathname === "/api/intake") return intake(req, res);
     if (req.method === "POST" && url.pathname === "/api/alerts") return api(req, res, "alerts");
     if (req.method === "POST" && url.pathname === "/api/early-access") return api(req, res, "early");
     if (url.pathname === "/health") return send(res, 200, { ok: true, db: !!db });

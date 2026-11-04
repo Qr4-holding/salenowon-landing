@@ -360,8 +360,16 @@ async function intake(req, res) {
     return send(res, 200, id ? (r.rows[0] || {}) : r.rows, "application/json", { "Cache-Control": "no-store" });
   }
   let body = "";
-  for await (const c of req) { body += c; if (body.length > 2_000_000) return send(res, 413, { error: "Too much data" }, "application/json", CORS); }
+  for await (const c of req) { body += c; if (body.length > 3_000_000) return send(res, 413, { error: "Too much data" }, "application/json", CORS); }
   let b; try { b = JSON.parse(body); } catch { return send(res, 400, { error: "Bad data" }, "application/json", CORS); }
+  if (b.kind === "links") {  // a brand directory: names and page links, no prices
+    const links = (Array.isArray(b.links) ? b.links : []).slice(0, 3000).map(l => ({ name: clean(l.name, 80), url: clean(l.url, 400) }))
+      .filter(l => l.name && /^https:\/\//.test(l.url));
+    if (!links.length) return send(res, 400, { error: "No brands in that page" }, "application/json", CORS);
+    const r = await db.query("insert into intake (campaign, host, page_url, page_title, products, count) values ($1,$2,$3,$4,$5,$6) returning id",
+      [clean(b.campaign, 60) || "Brands", clean(b.host, 120), clean(b.page_url, 800), clean(b.page_title, 200), JSON.stringify(links), links.length]);
+    return send(res, 200, { ok: true, id: r.rows[0].id, count: links.length }, "application/json", CORS);
+  }
   const items = (Array.isArray(b.products) ? b.products : []).slice(0, 300).map(p => ({
     name: clean(p.name, 160), was: +p.was || 0, now: +p.now || 0, cur: clean(p.cur, 3), off: Math.round(+p.off || 0),
     url: clean(p.url, 600), image: clean(p.image, 800) })).filter(p => p.name && p.now > 0 && p.was > p.now);

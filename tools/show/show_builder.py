@@ -40,7 +40,9 @@ def host_line(it, kind, n, second):
     if kind == "price": t = f"Was {pounds(it['was'])}, now {pounds(it['now'])}."
     elif kind == "price_short": t = f"Now {pounds(it['now'])}."
     elif kind == "item":  # every normal product: its name, the Was price and the Sale Now On price
-        return f"The {re.sub(r'^the ', '', it['title'], flags=re.I)}. Was {words(int(it['was'])) if it['was'] == int(it['was']) else pounds(it['was'])}, Sale Now On, {pounds(it['now'])}."
+        was = words(int(it['was'])) if it['was'] == int(it['was']) else pounds(it['was'])
+        joiner = ["now", "now only", "Sale Now On,"][n % 3]  # rotate the wording so a long show doesn't sound like a loop
+        return f"The {re.sub(r'^the ', '', it['title'], flags=re.I)}. Was {was}, {joiner} {pounds(it['now'])}."
     elif kind == "featured":  # paid slot: the full description and both prices
         sp = second.get(str(it["code"])); back = bool(sp and sp[1] == "Back view")
         plural = it["title"].split()[-1].lower() in ("jeans", "shorts", "pants", "trousers", "leggings", "joggers", "overalls")

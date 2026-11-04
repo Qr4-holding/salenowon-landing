@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header><b>SALE NOW ON</b><span>Send this page</span></header>
+  <main>
+    <p id="status" class="status">Reading the products on this page…</p>
+    <div id="found" hidden>
+      <p class="big"><span id="count">0</span> sale products found</p>
+      <p class="small" id="skipped"></p>
+      <ul id="preview"></ul>
+      <label for="campaign">Campaign name</label>
+      <input id="campaign" placeholder="e.g. Women's Jeans" maxlength="40">
+      <button id="send" type="button">Send to Sale Now On</button>
+    </div>
+    <p id="result" class="result" hidden></p>
+  </main>
+  <footer><button id="dash" type="button" class="link" style="margin-right:14px">Open my dashboard</button><button id="settings" type="button" class="link">Settings</button></footer>
+  <div id="settingsBox" hidden>
+    <label for="key">Your Sale Now On key</label>
+    <input id="key" autocomplete="off">
+    <button id="saveKey" type="button">Save</button>
+  </div>
+  <script src="extract.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

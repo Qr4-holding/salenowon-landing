@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Send to Sale Now On",
+  "version": "0.1.3",
+  "description": "Send the sale products on the page you are viewing to Sale Now On, to make deal ads.",
+  "action": {
+    "default_title": "Send to Sale Now On",
+    "default_popup": "popup.html",
+    "default_icon": { "16": "icon16.png", "32": "icon32.png", "48": "icon48.png", "128": "icon128.png" }
+  },
+  "icons": { "16": "icon16.png", "32": "icon32.png", "48": "icon48.png", "128": "icon128.png" },
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": ["https://salenowon.co.uk/*"]
+}

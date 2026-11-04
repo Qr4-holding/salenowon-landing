@@ -1,0 +1,18 @@
+<html><head><style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{width:1080px;height:1920px;overflow:hidden;font-family:Poppins,sans-serif;background:#fff;position:relative}
+#red{position:absolute;left:0;top:0;width:1080px;height:1130px;background:#d7262d;clip-path:polygon(0 0,100% 0,100% 88%,0 100%);overflow:hidden}
+.w{position:absolute;left:-120px;white-space:nowrap;font-weight:900;font-size:200px;line-height:1;color:rgba(255,255,255,.08);letter-spacing:-6px}
+#upto{position:absolute;left:0;right:0;top:120px;text-align:center;color:#fff;font-weight:900;font-size:110px;letter-spacing:-3px}
+#pct{position:absolute;left:0;right:0;top:220px;text-align:center;color:#fff;font-weight:900;font-size:470px;letter-spacing:-26px;line-height:1}
+#off{position:absolute;left:0;right:0;top:690px;text-align:center;color:#fff;font-weight:900;font-size:150px;letter-spacing:-4px;line-height:1}
+#stk{position:absolute;left:50%;top:880px;width:760px;margin-left:-380px;height:150px;border-radius:80px;background:#fff;color:#d7262d;font-weight:900;font-size:86px;letter-spacing:-3px;display:flex;align-items:center;justify-content:center;transform:rotate(-4deg);box-shadow:0 24px 60px rgba(0,0,0,.22)}
+.p{position:absolute;top:1130px;width:330px;height:495px;border-radius:28px;overflow:hidden;border:6px solid #fff;box-shadow:0 24px 60px rgba(0,0,0,.18);background:#fff}
+.p img{width:100%;height:100%;object-fit:cover}
+#cat{position:absolute;left:0;right:0;top:1690px;text-align:center;font-weight:900;font-size:88px;white-space:nowrap;color:#222;letter-spacing:-3px}
+#ad{position:absolute;right:40px;top:40px;background:#fff;color:#222;font-size:30px;font-weight:800;padding:6px 20px;border-radius:12px}
+</style></head><body>
+<div id="red">{{WALL}}<div id="upto">UP TO</div><div id="pct">{{PCT}}</div><div id="off">OFF</div></div>
+<div id="stk">SALE NOW ON</div>
+{{IMGS}}
+<div id="cat">{{LABEL}}</div><div id="ad">Ad</div></body></html>

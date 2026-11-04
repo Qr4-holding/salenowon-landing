@@ -1,4 +1,4 @@
-"""The Weekend Sale Now On: long-form 16:9 show builder (see tools/show/README.md and the sno-weekly-show skill).
+"""The Weekend Sale Now On, version 2: livelier long-form 16:9 show.
 
   python3 show2.py script SHOW.json OUT            -> OUT/vo-script.txt (one line per paragraph) + OUT/vo-lines.json
   (make the voiceover from vo-script.txt, save as OUT/vo-all.mp3)
@@ -39,11 +39,13 @@ def host_line(it, kind, n, second):
     """The host's line for one product: its price, a short description, or her opinion."""
     if kind == "price": t = f"Was {pounds(it['was'])}, now {pounds(it['now'])}."
     elif kind == "price_short": t = f"Now {pounds(it['now'])}."
+    elif kind == "item":  # every normal product: its name, the Was price and the Sale Now On price
+        return f"The {re.sub(r'^the ', '', it['title'], flags=re.I)}. Was {words(int(it['was'])) if it['was'] == int(it['was']) else pounds(it['was'])}, Sale Now On, {pounds(it['now'])}."
     elif kind == "featured":  # paid slot: the full description and both prices
         sp = second.get(str(it["code"])); back = bool(sp and sp[1] == "Back view")
         plural = it["title"].split()[-1].lower() in ("jeans", "shorts", "pants", "trousers", "leggings", "joggers", "overalls")
         return (f"Here {'are' if plural else 'is'} the {re.sub(r'^the ', '', it['title'], flags=re.I)}{', and that is the back view' if back else ''}. "
-                f"Was {pounds(it['was'])}, now {pounds(it['now'])}. That's {words(it['off'])} percent off.")
+                f"Was {pounds(it['was'])}, Sale Now On, {pounds(it['now'])}. That's {words(it['off'])} percent off.")
     elif kind == "desc":
         sp = second.get(str(it["code"])); back = bool(sp and sp[1] == "Back view")
         plural = it["title"].split()[-1].lower() in ("jeans", "shorts", "pants", "trousers", "leggings", "joggers", "overalls")
@@ -56,19 +58,25 @@ def plan_lines(show, second=None):
     second = second or {}
     secs = show["sections"]; L = []
     L.append(("open", None, "This is the Weekend Sale Now On. The biggest savings we found this week, all in one place."))
-    intro = ["First up, {n}. Up to {u} percent off.", "Next, {n}. Up to {u} percent off.", "Now, {n}. Up to {u} percent off.",
-             "Here come the {n}. Up to {u} percent off.", "And {n}. Up to {u} percent off.", "On to {n}. Up to {u} percent off."]
+    intro = ["First up, {n}, and there are some proper bargains in here. Up to {u} percent off.",
+             "Next, {n}. I love this lot. Up to {u} percent off.",
+             "Now, {n}, and a few of these really caught my eye. Up to {u} percent off.",
+             "Here come the {n}. Some lovely pieces in this one. Up to {u} percent off.",
+             "And {n}. Great for the weekend. Up to {u} percent off.",
+             "On to {n}. Up to {u} percent off, and worth a look."]
+    outro = ["That's the {n}. My pick? The {t}, at {p}.", "That's all the {n}. If I had to choose one, it's the {t}.",
+             "And that's the {n}. Don't miss the {t}, at {p}.", "That's the {n} done. My favourite was the {t}.",
+             "That wraps up the {n}. The {t} is the one for me."]
     mid = ["Look at this one. Down from {was} to {now}.", "That's {off} percent off.", "Save {save} on this one.",
            "Under {cap} pounds. Not bad at all.", "One of the best in this section."]
     g = guess_item(show); kinds = ["price", "desc", "comment"]; n = 0
     for i, s in enumerate(secs):
         top = max(x["off"] for x in s["items"])
         L.append(("intro", i, intro[min(i, len(intro) - 1)].format(n=spoken(s["name"]), u=words(top))))
-        for k, it in enumerate(s["items"]):
-            if it.get("featured"):  # a paid, longer slot always gets the full host treatment
-                L.append(("mid", i, k, host_line(it, "featured", n, second)))
-            elif k % 2 == 1:  # every second product; the first is covered by the section intro
-                L.append(("mid", i, k, host_line(it, ["price_short", "comment"][n % 2], n, second))); n += 1
+        for k, it in enumerate(s["items"]):  # every product gets a line; paid FEATURED slots get the full description
+            L.append(("mid", i, k, host_line(it, "featured" if it.get("featured") else "item", n, second))); n += 1
+        pick = max(s["items"], key=lambda x: (bool(x.get("featured")), x["off"]))
+        L.append(("outro", i, outro[i % len(outro)].format(n=spoken(s["name"]), t=re.sub(r'^the ', '', pick["title"], flags=re.I), p=pounds(pick["now"]))))
         if i == 1 and show.get("guess"):
             L.append(("guess1", i, f"Time to play guess the price! This was {pounds(g['was'])}. What do you think it's down to? You've got five seconds."))
             L.append(("guess2", i, f"It's {pounds(g['now'])}! That's {words(g['off'])} percent off."))
@@ -407,11 +415,26 @@ tl.fromTo("#o4", { opacity: 0, y: 30 }, { opacity: 1, y: 0, duration: 0.4 }, 1.3
         starts_k = [card + sum(durs[:k]) for k in range(len(durs))]
         for k, it in enumerate(s["items"]):
             st = starts_k[k]; a_, b_, allp = m[it["code"]]
-            hh, jj, ee = product_slot(show, i, k, it, st, a_, b_, len(s["items"]), deal_no, n_total, upnext if k == len(s["items"]) - 1 else None,
+            hh, jj, ee = product_slot(show, i, k, it, st, a_, b_, len(s["items"]), deal_no, n_total, None,
                                       dur=durs[k], photos=allp[:4] if it.get("featured") else None)
             html.append(hh); js += jj; ev += [(t, kind, None) for t, kind in ee]; deal_no += 1
             if k in said: ev.append((st + 0.6, "vo", said[k]))
         total = card + sum(durs)
+        oi = next((li for li, x in enumerate(L) if x[0] == "outro" and x[1] == i), None)
+        if oi is not None:  # category outro: the host's pick, with what's coming next
+            pick = max(s["items"], key=lambda x: (bool(x.get("featured")), x["off"])); od = max(3.2, vlen[oi] + 1.0); o0 = total
+            nx = f'<div class="ctr" style="top:900px;font-size:40px;font-weight:800">Coming up next: {esc(upnext)}</div>' if upnext else ""
+            html.append(f'''<div id="ow" class="clip full redbg" data-start="{o0:.2f}" data-duration="{od:.2f}" data-track-index="30" style="z-index:30" data-layout-allow-occlusion data-layout-allow-overlap>{wall(s["name"].split()[0].upper())}
+<div class="pa" style="left:160px;top:120px;width:500px;height:750px;border-color:#fff"><img src="{m[pick["code"]][0]}" alt="" /></div>
+<div class="ctr" style="left:760px;right:80px;text-align:left;top:180px;font-size:44px;font-weight:800;color:rgba(255,255,255,.85)">That's the {esc(s["name"].lower())}</div>
+<div class="ctr" style="left:760px;right:80px;text-align:left;top:250px;font-size:96px;letter-spacing:-3px;line-height:1">MY PICK</div>
+<div class="ctr" style="left:760px;right:80px;text-align:left;top:380px;font-size:60px;letter-spacing:-2px;line-height:1.05;white-space:normal">{esc(pick["title"])}</div>
+<div class="ctr" style="left:760px;right:80px;text-align:left;top:560px"><span style="display:inline-block;background:#fff;color:#d7262d;border-radius:70px;padding:10px 40px;font-size:80px;letter-spacing:-2px">{money(pick["cur"], pick["now"])}</span> <span style="font-size:44px;opacity:.8;margin-left:16px"><s>{money(pick["cur"], pick["was"])}</s></span></div>
+<div class="ctr" style="left:760px;right:80px;text-align:left;top:720px;font-size:40px;font-weight:700">Deal code SNO {pick["code"]}</div>
+{nx}</div>''')
+            js += [f'tl.fromTo("#ow", {{ opacity: 0 }}, {{ opacity: 1, duration: 0.25, immediateRender: false }}, {o0:.2f});',
+                   f'tl.fromTo("#ow .pa", {{ opacity: 0, x: -80 }}, {{ opacity: 1, x: 0, duration: 0.4, ease: "power3.out", immediateRender: false }}, {o0 + 0.1:.2f});']
+            ev += [(o0, "hit", None), (o0 + 0.3, "vo", oi)]; total = o0 + od
         project(p, "\n".join(html), "\n".join(js), total)
         parts.append(dict(path=p, dur=total, chapter=f'{s["name"]} (up to {top}% off)', events=ev,
                           items=[(starts_k[k], it, s["name"]) for k, it in enumerate(s["items"])]))

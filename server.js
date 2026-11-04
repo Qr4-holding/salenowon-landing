@@ -37,7 +37,7 @@ async function migrate() {
           ref text, src text, visitor text, device text);
         create index if not exists events_ts on events (ts);
         delete from events where ts < now() - interval '13 months';`);
-      await D.migrate();
+      await D.migrate(); await P.migrate(); await P.classify();
       return console.log("db ready");
     } catch (e) { console.log("waiting for db…", e.message); await new Promise(r => setTimeout(r, 3000)); }
   }
@@ -185,6 +185,9 @@ async function admin(req, res, url) {
   }
   if (url.pathname === "/admin/stats") return stats(res, url);
   if (url.pathname === "/admin/deals") return D.adminDeals(req, res, url);
+  if (url.pathname === "/admin/planner" && req.method === "GET") return P.page(req, res, url);
+  if (url.pathname === "/admin/planner/add" && req.method === "POST") return P.add(req, res);
+  if (url.pathname === "/admin/events" || /^\/admin\/events\/\d+$/.test(url.pathname)) return P.eventsPage(req, res, url);
   const im = /^\/admin\/intake\/(\d+)\.json$/.exec(url.pathname);
   if (im) { const r = await db.query("select * from intake where id=$1", [+im[1]]); return send(res, r.rows.length ? 200 : 404, r.rows[0] || { error: "not found" }); }
   if (url.pathname === "/admin/intake.json") { const r = await db.query("select id,campaign,host,page_url,count,created_at from intake order by id desc limit 200"); return send(res, 200, r.rows); }
@@ -208,7 +211,7 @@ async function admin(req, res, url) {
   const table = (rows, cols, t) => `<table><tr>${cols.map(c => `<th>${c}</th>`).join("")}<th></th></tr>${rows.map(r => `<tr>${cols.map(c => `<td>${cellOf(c, r[c])}</td>`).join("")}<td><form method="post" action="/admin/delete?t=${t}&id=${r.id}" onsubmit="return confirm('Delete this entry for good?')"><button style="border:0;background:none;color:#a31c22;cursor:pointer;font:inherit">Delete</button></form></td></tr>`).join("")}</table>`;
   send(res, 200, `<!doctype html><meta name=viewport content="width=device-width,initial-scale=1"><title>SNO admin</title>
 <link rel="stylesheet" href="/style.css"><style>table{border-collapse:collapse;width:100%;font-size:14px;margin:10px 0 30px}th,td{border-bottom:1px solid #e2e2e2;padding:7px;text-align:left;vertical-align:top}th{color:#6b6b6b}</style>
-<main class="wrap" style="padding-top:24px"><a class="logo" href="/">SALE NOW ON</a> <span class="pill">Admin</span> <a href="/admin/stats" style="margin-left:12px;font-weight:700">Analytics →</a> <a href="/admin/deals" style="margin-left:12px;font-weight:700">Deals →</a> <a href="/admin/logout" style="margin-left:12px;font-size:13px;color:#6b6b6b">Sign out</a>
+<main class="wrap" style="padding-top:24px"><a class="logo" href="/">SALE NOW ON</a> <span class="pill">Admin</span> <a href="/admin/stats" style="margin-left:12px;font-weight:700">Analytics →</a> <a href="/admin/deals" style="margin-left:12px;font-weight:700">Deals →</a> <a href="/admin/planner" style="margin-left:12px;font-weight:700">Event planner →</a> <a href="/admin/logout" style="margin-left:12px;font-size:13px;color:#6b6b6b">Sign out</a>
 <h2 style="margin-top:24px">Pages sent from Chrome · ${(it = (await db.query("select id,campaign,host,count,created_at from intake order by id desc limit 50")).rows).length}</h2>${table(it, ["campaign", "host", "count", "created_at"], "intake")}
 <h2 style="margin-top:24px">QR short links · salenowon.co.uk/go/…</h2>${(lk = (await db.query("select code as id, code, target, fallback, starts_at, ends_at, scans, note from links order by updated_at desc")).rows, "")}${table(lk.map(l => ({ ...l, tools: l.code })), ["code", "target", "fallback", "starts_at", "ends_at", "scans", "note", "tools"], "links")}
 ${linkForm(lk.find(l => l.code === url.searchParams.get("edit")))}
@@ -389,6 +392,26 @@ http.createServer(async (req, res) => {
       if (req.method !== "POST" || !process.env.INTAKE_KEY || req.headers["x-sno-key"] !== process.env.INTAKE_KEY) return send(res, 401, { error: "Wrong or missing key" });
       return send(res, 200, await D.fromIntake(+url.searchParams.get("id")));
     }
+    if (url.pathname.startsWith("/api/brands") || url.pathname.startsWith("/api/events")) {  // for the builders and the import tools
+      if (!process.env.INTAKE_KEY || req.headers["x-sno-key"] !== process.env.INTAKE_KEY) return send(res, 401, { error: "Wrong or missing key" });
+      if (url.pathname === "/api/brands" && req.method === "POST") {
+        let body = ""; for await (const c of req) { body += c; if (body.length > 3_000_000) return send(res, 413, { error: "Too much data" }); }
+        let j; try { j = JSON.parse(body); } catch { return send(res, 400, { error: "Bad data" }); }
+        return send(res, 200, await P.importBrands(j.brands, j.shop));
+      }
+      if (url.pathname === "/api/events" && req.method === "GET") {
+        const st = url.searchParams.get("status");
+        return send(res, 200, (await db.query(`select id, name, show_date, status, jsonb_array_length(items) n from sale_events ${st ? "where status=$1" : ""} order by id`, st ? [st] : [])).rows);
+      }
+      const em = /^\/api\/events\/(\d+)(\/status)?$/.exec(url.pathname);
+      if (em && !em[2] && req.method === "GET") { const f = await P.eventFeed(+em[1]); return send(res, f ? 200 : 404, f || { error: "No such event" }); }
+      if (em && em[2] && req.method === "POST") {
+        let body = ""; for await (const c of req) { body += c; if (body.length > 2000) break; }
+        let j = {}; try { j = JSON.parse(body); } catch {}
+        return send(res, (await P.setEventStatus(+em[1], j.status)) ? 200 : 400, { ok: true });
+      }
+      return send(res, 404, { error: "Not found" });
+    }
     if (url.pathname === "/api/deals") { // feed for the show and ad builders
       if (!process.env.INTAKE_KEY || req.headers["x-sno-key"] !== process.env.INTAKE_KEY) return send(res, 401, { error: "Wrong or missing key" });
       const st = ["live", "pending", "all"].includes(url.searchParams.get("status")) ? url.searchParams.get("status") : "live";
@@ -433,6 +456,9 @@ http.createServer(async (req, res) => {
   } catch (e) { console.error(e); if (!res.headersSent) send(res, 500, "Something went wrong", "text/plain"); else res.end(); }
 }).listen(PORT, () => console.log("Sale Now On landing on :" + PORT));
 
-const D = require("./deals")({ db, esc, clean, send, SEC, track, authed });
+const hooks = {};
+const D = require("./deals")({ db, esc, clean, send, SEC, track, authed, hooks });
+const P = require("./planner")({ db, esc, clean, send, SEC });
+hooks.afterImport = () => P.classify();
 process.on("unhandledRejection", e => console.error("unhandled", e));
 migrate();

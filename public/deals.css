@@ -75,3 +75,4 @@
 .watch{flex:0 0 auto;border:2px solid var(--red);color:var(--red);border-radius:30px;padding:6px 14px;font-weight:800;text-decoration:none;white-space:nowrap}
 .watch:hover{background:var(--red);color:#fff}
 @media (min-width:900px){.sgrid{grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:34px;align-items:start}.sleft{position:sticky;top:16px}}
+a.btn{display:inline-flex;align-items:center;text-decoration:none}

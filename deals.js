@@ -4,7 +4,7 @@
 const SHOW_SHOP = false;
 const DAYS_LIVE = 7; // a deal expires this many days after its price was read
 
-module.exports = function deals({ db, esc, clean, send, SEC, track, authed }) {
+module.exports = function deals({ db, esc, clean, send, SEC, track, authed, hooks = {} }) {
   const GARMENT = /^(jeans?|shorts?|skirts?|dress|dresses|jackets?|shirts?|tops?|pants|trousers?|coats?|vests?|jumpsuits?|overalls?|rompers?|corsets?|bodysuits?|blazers?|tunics?|capris?|cardigans?|jumpers?|sweaters?|hoodies?|bags?|boots?|trainers?|sandals?|heels?|shoes?|blouses?|leggings?|joggers?|bras?|knickers?|pyjamas?|swimsuits?|bikinis?|scarf|scarves|hats?|belts?|bracelets?|necklaces?|earrings?|rings?|watch|watches|sunglasses|wallets?|purses?)$/i;
   const fmt = (cur, v) => (cur || "£") + (v % 1 ? (+v).toFixed(2) : String(+v));
   const ukDate = d => new Date(d).toLocaleString("en-GB", { timeZone: "Europe/London", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
@@ -21,6 +21,8 @@ module.exports = function deals({ db, esc, clean, send, SEC, track, authed }) {
       create table if not exists shows (
         slug text primary key, title text not null, date_label text, video text, youtube text, duration numeric,
         chapters jsonb not null default '[]', items jsonb not null default '[]', created_at timestamptz not null default now(), updated_at timestamptz not null default now());`);
+    // earlier imports kept the small Shopify listing photo (width=384): switch them to the large one
+    await db.query(`update deals set images = regexp_replace(images::text, '(/cdn/shop/[^"]*[?&])width=[0-9]+', '\\1width=1400', 'g')::jsonb where images::text ~ '/cdn/shop/[^"]*width=(?!1400)[0-9]+'`);
   }
 
   // "Amana Denim Shirt The Wolf Gang" -> "Amana Denim Shirt": cut after the last garment word; else drop trailing capitalised brand words
@@ -36,9 +38,10 @@ module.exports = function deals({ db, esc, clean, send, SEC, track, authed }) {
     const u = String(p.image || ""); if (!/^https:\/\//.test(u)) return [];
     const m = /^(https:\/\/is\d\.revolveassets\.com\/images\/p4\/n\/)[a-z]+\/(.+)_V1\.jpg$/.exec(u);
     if (m) return [1, 2, 3, 4, 5, 6].map(v => `${m[1]}z/${m[2]}_V${v}.jpg`); // Revolve numbers each product's photos
+    if (/\/cdn\/shop\//.test(u)) return [u.replace(/([?&])width=\d+/, "$1width=1400")]; // Shopify shops (e.g. Mint Velvet) send a small listing photo: ask for a large one
     return [u];
   }
-  const thumbOf = d => String(d.images[0] || "").replace("/images/p4/n/z/", "/images/p4/n/uv/");
+  const thumbOf = d => String(d.images[0] || "").replace("/images/p4/n/z/", "/images/p4/n/uv/").replace(/(\/cdn\/shop\/[^"]*[?&])width=\d+/, "$1width=300");
 
   // Names that are really photo captions ("(Image 0).") are replaced by the name in the product's link
   const junkName = t => !t || t.length < 4 || /^[(\[]?\s*(image|img|photo|picture|product( image)?)\s*\d*\s*[)\]]?\.?$/i.test(String(t).trim()) || !/[a-z]{3}/i.test(t);
@@ -61,6 +64,7 @@ module.exports = function deals({ db, esc, clean, send, SEC, track, authed }) {
       q.rows[0].inserted ? added++ : skipped++;
     }
     await db.query("update deals set code = id + 1000 where code is null");
+    if (hooks.afterImport) await hooks.afterImport();  // sort the new deals by kind, colour and brand
     return { ok: true, added, updated_or_skipped: skipped };
   }
 

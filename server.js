@@ -309,7 +309,7 @@ async function stats(res, url) {
     from links l left join events e on e.kind='scan' and e.code=l.code group by l.code order by scans desc, all_time desc`, [days + " days"]);
   const sources = await q(`select coalesce(src, ref, 'Direct or typed in') source, count(*) n from events where kind in ('view','scan') and ts >= now() - $1::interval group by 1 order by 2 desc limit 12`, [days + " days"]);
   const devices = await q(`select device, count(distinct (visitor, ts::date)) n from events where ts >= now() - $1::interval group by 1 order by 2 desc`, [days + " days"]);
-  const pages = await q(`select case when path = '/' then 'Home page' when path = '/privacy' then 'Privacy notice' when path = '/bot' then 'Robot information' when path = '/deals' then 'Deals hub' when path like '/d/%' then 'Deal ' || substr(path, 4) else path end as path, count(*) n from events where kind='view' and ts >= now() - $1::interval group by 1 order by 2 desc limit 10`, [days + " days"]);
+  const pages = await q(`select case when path = '/' then 'Home page' when path = '/privacy' then 'Privacy notice' when path = '/bot' then 'Robot information' when path = '/deals' then 'Deals hub' when path like '/show/%' then 'Show page ' || substr(path, 7) when path like '/d/%' then 'Deal ' || substr(path, 4) else path end as path, count(*) n from events where kind='view' and ts >= now() - $1::interval group by 1 order by 2 desc limit 10`, [days + " days"]);
   const fmt = n => Number(n).toLocaleString("en-GB");
   const change = (a, b) => { a = +a; b = +b; if (!b) return a ? `<span class="chg">new this period</span>` : `<span class="chg">no activity yet</span>`;
     const pc = Math.round(100 * (a - b) / b); return `<span class="chg">${pc >= 0 ? "▲ up" : "▼ down"} ${Math.abs(pc)}% on the previous ${days} days</span>`; };
@@ -388,6 +388,15 @@ http.createServer(async (req, res) => {
         where ${st === "all" ? "status in ('live','pending')" : "status = $1"} and (expires_at is null or expires_at > now()) order by off desc limit 2000`, st === "all" ? [] : [st]);
       return send(res, 200, r.rows, "application/json", { "Cache-Control": "no-store" });
     }
+    if (url.pathname === "/api/shows") {
+      if (req.method !== "POST" || !process.env.INTAKE_KEY || req.headers["x-sno-key"] !== process.env.INTAKE_KEY) return send(res, 401, { error: "Wrong or missing key" });
+      let body = ""; for await (const c of req) { body += c; if (body.length > 3_000_000) return send(res, 413, { error: "Too much data" }); }
+      let j; try { j = JSON.parse(body); } catch { return send(res, 400, { error: "Bad data" }); }
+      const err = await D.saveShow(j); return send(res, err ? 400 : 200, err ? { error: err } : { ok: true, url: "https://salenowon.co.uk/show/" + j.slug });
+    }
+    if (db && (url.pathname === "/shows" || url.pathname === "/shows/")) return await D.showsList(req, res);
+    const sm = /^\/show\/([a-z0-9-]{1,60})\/?$/.exec(url.pathname);
+    if (db && sm) return await D.showPage(req, res, sm[1]);
     if (db && (url.pathname === "/deals" || url.pathname === "/deals/")) return await D.hub(req, res, url);
     const dm = /^\/(d|out)\/(\d{1,9})\/?$/.exec(url.pathname);
     if (db && dm) return dm[1] === "d" ? await D.dealPage(req, res, dm[2]) : await D.out(req, res, dm[2]);

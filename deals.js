@@ -17,7 +17,10 @@ module.exports = function deals({ db, esc, clean, send, SEC, track, authed }) {
         source_intake int, status text not null default 'pending', checked_at timestamptz not null default now(),
         expires_at timestamptz, created_at timestamptz not null default now(), decided_at timestamptz);
       create index if not exists deals_status on deals (status, off desc);
-      create table if not exists settings (key text primary key, value text);`);
+      create table if not exists settings (key text primary key, value text);
+      create table if not exists shows (
+        slug text primary key, title text not null, date_label text, video text, youtube text, duration numeric,
+        chapters jsonb not null default '[]', items jsonb not null default '[]', created_at timestamptz not null default now(), updated_at timestamptz not null default now());`);
   }
 
   // "Amana Denim Shirt The Wolf Gang" -> "Amana Denim Shirt": cut after the last garment word; else drop trailing capitalised brand words
@@ -148,6 +151,7 @@ ${more.length ? `<section class="more"><h2 class="dh2">More ${esc(deal.category)
       const f = new URLSearchParams(body), act = f.get("act");
       if (act === "public") await db.query("insert into settings (key,value) values ('deals_public',$1) on conflict (key) do update set value=$1", [f.get("v") === "on" ? "on" : "off"]);
       if (act === "intake") await fromIntake(+f.get("id"));
+      if (act === "youtube") { const err = await setYoutube(String(f.get("slug") || ""), String(f.get("yt") || "").trim()); if (err) return send(res, 400, err + ". Go back and try again.", "text/plain; charset=utf-8"); }
       if (act === "live" || act === "skipped" || act === "pending") {
         const ids = f.getAll("id").map(Number).filter(Boolean);
         if (ids.length) await db.query("update deals set status=$1, decided_at=now() where id = any($2)", [act, ids]);
@@ -178,11 +182,80 @@ ${list.length ? `<form method="post"><input type="hidden" name="back" value="${s
 <button type="button" class="btn ghost" onclick="document.querySelectorAll('.arow input').forEach(i=>i.checked=true)">Tick all</button>
 <button type="button" class="btn ghost" onclick="document.querySelectorAll('.arow input').forEach(i=>i.checked=false)">Untick all</button></div>
 <div class="alist">${list.map(row).join("")}</div></form>` : `<p class="lead">Nothing here.</p>`}
+<h2 style="margin-top:34px">Shows</h2>
+${(await listShows()).map(sh => `<form method="post" class="pubbox" style="margin:8px 0"><div><b>${esc(sh.title)} · ${esc(sh.date_label || "")}</b> <span class="small">${sh.n} deals · <a href="/show/${esc(sh.slug)}" target="_blank">open the show page</a></span></div>
+<input type="hidden" name="act" value="youtube"><input type="hidden" name="slug" value="${esc(sh.slug)}"><input type="hidden" name="back" value="${s}">
+<div class="row" style="display:flex;gap:8px;flex:1;min-width:260px"><input name="yt" placeholder="Paste the YouTube link once it's uploaded" value="${esc(sh.youtube || "")}" style="flex:1"><button class="btn">Save</button></div></form>`).join("") || '<p class="small">No shows yet.</p>'}
 <h2 style="margin-top:34px">Make deals from a page you sent</h2>
 <table style="width:100%;border-collapse:collapse;font-size:14px">${intakes.map(i => `<tr style="border-bottom:1px solid #e2e2e2"><td style="padding:8px">${esc(i.campaign)}<br><span class="small">${esc(i.host)} · ${i.count} products · ${esc(ukDate(i.created_at))}</span></td>
 <td style="padding:8px;text-align:right">${+i.made ? `<span class="small">${i.made} deals made</span> ` : ""}<form method="post" style="display:inline"><input type="hidden" name="act" value="intake"><input type="hidden" name="id" value="${i.id}"><button class="btn ghost">${+i.made ? "Refresh prices" : "Make deals"}</button></form></td></tr>`).join("")}</table>
 </main>`, "text/html; charset=utf-8", { "Cache-Control": "no-store" });
   }
 
-  return { migrate, hub, dealPage, out, adminDeals, fromIntake, brandFree };
+  // ---- show pages: every deal in a show, with a link to the moment it appears ----
+  const ts = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+  const ytId = u => { let h; try { h = new URL(String(u || "")).hostname.replace(/^(www|m)\./, ""); } catch { return null; }
+    if (!["youtube.com", "youtu.be", "youtube-nocookie.com"].includes(h)) return null;
+    const m = /(?:youtu\.be\/|[?&]v=|\/embed\/|\/live\/|\/shorts\/)([\w-]{11})/.exec(String(u)); return m ? m[1] : null; };
+
+  async function showPage(req, res, slug) {
+    const g = await gate(req, res); if (!g.ok) return;
+    const r = await db.query("select * from shows where slug=$1", [slug]); const sh = r.rows[0];
+    if (!sh) return send(res, 404, page("Show not found", `<main class="wrap dz"><h1 style="font-size:40px">We couldn't find that show</h1><p><a class="btn" href="/shows">See all shows</a></p></main>`, { preview: g.preview }), "text/html; charset=utf-8");
+    const codes = sh.items.map(i => +i.code);
+    const imgs = Object.fromEntries((await db.query("select code, images from deals where code = any($1)", [codes])).rows.map(d => [d.code, d.images[0]]));
+    if (!g.preview) track(req, "view");
+    const yt = ytId(sh.youtube);
+    const player = yt ? `<div class="vwrap"><iframe id="yt" src="https://www.youtube-nocookie.com/embed/${yt}?rel=0" title="${esc(sh.title)}" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe></div>`
+      : sh.video ? `<div class="vwrap"><video id="vid" controls playsinline preload="metadata" src="${esc(sh.video)}"></video></div>` : `<p class="lead">The video is coming soon.</p>`;
+    const go = t => yt ? `https://www.youtube.com/watch?v=${yt}&t=${Math.floor(t)}s` : `#t=${Math.floor(t)}`;
+    const sections = []; for (const it of sh.items) { let s = sections.find(x => x.name === it.section); if (!s) sections.push(s = { name: it.section, items: [] }); s.items.push(it); }
+    const row = it => `<div class="srow" id="sno${it.code}"><a class="sthumb" href="/d/${it.code}"><img src="${esc(String(imgs[it.code] || "").replace("/n/z/", "/n/uv/"))}" alt="" loading="lazy"><b class="doff">${it.off}%</b></a>
+<div class="sinfo"><a class="dname" href="/d/${it.code}">${esc(it.title)}</a><span class="dcode">SNO ${it.code}</span><span class="dprice"><b>${fmt(it.cur, it.now)}</b> <s>${fmt(it.cur, it.was)}</s></span></div>
+<a class="watch" href="${go(it.t)}" data-t="${Math.floor(it.t)}" ${yt ? 'target="_blank" rel="noopener"' : ""}>▶ ${ts(it.t)}</a></div>`;
+    send(res, 200, page(sh.title + " · " + (sh.date_label || ""), `<main class="wrap dz showpage">
+<p class="dcat">${esc(sh.date_label || "")} · ${sh.items.length} deals · ${ts(+sh.duration || 0)}</p><h1 class="dh1">${esc(sh.title)}</h1>
+<div class="sgrid"><div class="sleft">${player}
+<h2 class="dh2">Jump to a part</h2><div class="chaps">${sh.chapters.map(c => `<a href="${go(c.t)}" data-t="${Math.floor(c.t)}" ${yt ? 'target="_blank" rel="noopener"' : ""}><b>${ts(c.t)}</b> ${esc(c.label)}</a>`).join("")}</div></div>
+<div class="sright"><form class="codebox" id="findf"><label for="fc">Saw a deal in the show? Enter its code</label><div class="row"><input id="fc" inputmode="numeric" placeholder="e.g. 1132" autocomplete="off"><button class="btn">Find</button></div><p class="small" id="fmsg"></p></form>
+${sections.map(s => `<h2 class="dh2">${esc(s.name)}</h2>${s.items.map(row).join("")}`).join("")}</div></div>
+</main><script>
+(function(){var v=document.getElementById("vid"),y=document.getElementById("yt");
+function seek(t){if(v){v.currentTime=t;v.play();v.scrollIntoView({behavior:"smooth",block:"center"});return true}
+ if(y){y.src="https://www.youtube-nocookie.com/embed/${yt || ""}?rel=0&autoplay=1&start="+t;y.scrollIntoView({behavior:"smooth",block:"center"});return true}return false}
+document.querySelectorAll("[data-t]").forEach(function(a){a.addEventListener("click",function(e){if(seek(+a.dataset.t))e.preventDefault()})});
+document.getElementById("findf").addEventListener("submit",function(e){e.preventDefault();var c=document.getElementById("fc").value.replace(/\\D/g,""),el=document.getElementById("sno"+c),m=document.getElementById("fmsg");
+ document.querySelectorAll(".srow.hit").forEach(function(x){x.classList.remove("hit")});
+ if(!el){m.textContent="Deal SNO "+c+" wasn't in this show. Try the deals page.";return}m.textContent="";el.classList.add("hit");el.scrollIntoView({behavior:"smooth",block:"center"});seek(+el.querySelector("[data-t]").dataset.t)});
+if(v&&location.hash.indexOf("#t=")===0)v.currentTime=+location.hash.slice(3)})();
+</script>`, { preview: g.preview, desc: `${sh.title}, ${sh.date_label}: ${sh.items.length} deals, with the moment each one appears.` }), "text/html; charset=utf-8", { "Cache-Control": "no-store" });
+  }
+
+  async function showsList(req, res) {
+    const g = await gate(req, res); if (!g.ok) return;
+    const rows = (await db.query("select slug, title, date_label, duration, jsonb_array_length(items) n from shows order by created_at desc limit 60")).rows;
+    send(res, 200, page("Shows", `<main class="wrap dz"><h1 class="dh1">The Weekend Sale Now On</h1><p class="lead">Every show, with every deal and the moment it appears.</p>
+<div class="alist" style="margin-top:20px">${rows.map(r => `<a class="dcard" href="/show/${esc(r.slug)}" style="padding:14px 16px"><span class="dinfo"><span class="dname">${esc(r.title)} · ${esc(r.date_label || "")}</span><span class="dcode">${r.n} deals · ${ts(+r.duration || 0)}</span></span></a>`).join("") || '<p class="lead">The first show is coming soon.</p>'}</div></main>`, { preview: g.preview }), "text/html; charset=utf-8", { "Cache-Control": "no-store" });
+  }
+
+  async function saveShow(b) {
+    const slug = String(b.slug || "").toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 60);
+    if (!slug) return "Missing slug";
+    const okVideo = v => !v || /^\/media\/shows\/[\w.-]+\.mp4$/.test(v) ? (v || null) : undefined;
+    const video = okVideo(b.video); if (video === undefined) return "Video must be a file under /media/shows/";
+    const yt = b.youtube ? (ytId(b.youtube) ? "https://www.youtube.com/watch?v=" + ytId(b.youtube) : undefined) : null; if (yt === undefined) return "That isn't a YouTube link";
+    const items = (Array.isArray(b.items) ? b.items : []).slice(0, 3000).map(i => ({ code: +i.code, t: +i.t || 0, section: clean(i.section, 60), title: clean(i.title, 120), now: +i.now, was: +i.was, cur: clean(i.cur, 3) || "£", off: Math.round(+i.off || 0) })).filter(i => i.code);
+    const chapters = (Array.isArray(b.chapters) ? b.chapters : []).slice(0, 200).map(c => ({ t: +c.t || 0, label: clean(c.label, 80) }));
+    await db.query(`insert into shows (slug, title, date_label, video, youtube, duration, chapters, items) values ($1,$2,$3,$4,$5,$6,$7,$8)
+      on conflict (slug) do update set title=$2, date_label=$3, video=coalesce($4, shows.video), youtube=coalesce($5, shows.youtube), duration=$6, chapters=$7, items=$8, updated_at=now()`,
+      [slug, clean(b.title, 120) || "The Weekend Sale Now On", clean(b.date, 40), video, yt, +b.duration || 0, JSON.stringify(chapters), JSON.stringify(items)]);
+    return null;
+  }
+  async function setYoutube(slug, url) {
+    const id = ytId(url); if (url && !id) return "That isn't a YouTube link";
+    await db.query("update shows set youtube=$2, updated_at=now() where slug=$1", [slug, id ? "https://www.youtube.com/watch?v=" + id : null]); return null;
+  }
+  const listShows = async () => (await db.query("select slug, title, date_label, youtube, jsonb_array_length(items) n from shows order by created_at desc limit 20")).rows;
+
+  return { migrate, hub, dealPage, out, adminDeals, fromIntake, brandFree, showPage, showsList, saveShow, setYoutube, listShows };
 };

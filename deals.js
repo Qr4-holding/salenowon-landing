@@ -40,12 +40,17 @@ module.exports = function deals({ db, esc, clean, send, SEC, track, authed }) {
   }
   const thumbOf = d => String(d.images[0] || "").replace("/images/p4/n/z/", "/images/p4/n/uv/");
 
+  // Names that are really photo captions ("(Image 0).") are replaced by the name in the product's link
+  const junkName = t => !t || t.length < 4 || /^[(\[]?\s*(image|img|photo|picture|product( image)?)\s*\d*\s*[)\]]?\.?$/i.test(String(t).trim()) || !/[a-z]{3}/i.test(t);
+  const fromUrl = u => { try { const seg = new URL(u).pathname.split("/").filter(Boolean).pop() || ""; return /[a-z]-[a-z]/i.test(seg) ? seg.replace(/\.[a-z]+$/i, "").replace(/[-_]+/g, " ").replace(/\b\w/g, c => c.toUpperCase()) : ""; } catch { return ""; } };
   async function fromIntake(id) {
     const r = await db.query("select * from intake where id=$1", [id]); if (!r.rows.length) return { error: "No such page" };
     const it = r.rows[0], cat = clean(it.campaign, 60).replace(/\s+on\s*:.*$/i, "").trim() || "Sale";
     let added = 0, skipped = 0;
     for (const p of it.products) {
       const imgs = imagesFor(p), url = String(p.url || "");
+      if (junkName(p.name)) p.name = fromUrl(url);
+      if (!p.name) { skipped++; continue; }
       if (!imgs.length || !/^https:\/\//.test(url) || !(p.was > p.now) || p.now <= 0) { skipped++; continue; }
       const q = await db.query(`insert into deals (title, category, now, was, cur, off, images, shop, url, source_intake, checked_at, expires_at)
         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11::timestamptz + interval '${DAYS_LIVE} days')

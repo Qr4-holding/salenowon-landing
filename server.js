@@ -381,6 +381,13 @@ http.createServer(async (req, res) => {
       if (req.method !== "POST" || !process.env.INTAKE_KEY || req.headers["x-sno-key"] !== process.env.INTAKE_KEY) return send(res, 401, { error: "Wrong or missing key" });
       return send(res, 200, await D.fromIntake(+url.searchParams.get("id")));
     }
+    if (url.pathname === "/api/deals") { // feed for the show and ad builders
+      if (!process.env.INTAKE_KEY || req.headers["x-sno-key"] !== process.env.INTAKE_KEY) return send(res, 401, { error: "Wrong or missing key" });
+      const st = ["live", "pending", "all"].includes(url.searchParams.get("status")) ? url.searchParams.get("status") : "live";
+      const r = await db.query(`select code, title, category, now::float, was::float, cur, off, images, checked_at, expires_at, status from deals
+        where ${st === "all" ? "status in ('live','pending')" : "status = $1"} and (expires_at is null or expires_at > now()) order by off desc limit 2000`, st === "all" ? [] : [st]);
+      return send(res, 200, r.rows, "application/json", { "Cache-Control": "no-store" });
+    }
     if (db && (url.pathname === "/deals" || url.pathname === "/deals/")) return await D.hub(req, res, url);
     const dm = /^\/(d|out)\/(\d{1,9})\/?$/.exec(url.pathname);
     if (db && dm) return dm[1] === "d" ? await D.dealPage(req, res, dm[2]) : await D.out(req, res, dm[2]);
